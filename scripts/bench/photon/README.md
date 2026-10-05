@@ -51,12 +51,23 @@ Windows client, with no camera and no microphone.
   buffer behind how many queued frames) on the relay's steady clock; with
   `audiolog=1` the beep shows in the host's own capture as the `peak` column.
 - **Client**: the page plays sound (not a `--mute-audio` kiosk), the cursor
-  rests on the stream, then `mw-click-sound --clicks 30 --flag X,Y --out a.json`.
+  rests on the stream, then `mw-click-sound --clicks 30 --window MoonlightWeb --out a.json`.
   It clicks (SendInput), hears its own output through WASAPI loopback (each
-  packet carries the QPC time of its first sample) and, with `--flag`, watches
-  that screen pixel (a point of the host's flag in the stream) like
-  `click-photon.ps1`. Per click: click → sound, click → flag, sound − flag (the
-  lip-sync offset). `--tick SECS`, against a host in `tick`: the offset alone.
+  packet carries the QPC time of its first sample) and watches one pixel of the
+  composed desktop for the host's flag: `--flag X,Y` names a point of its left,
+  pure blue band, or `--window TITLE` finds the stream's window and takes 46 %
+  across, 2.5 % down (the flag's blue band when the stream fills the window).
+  Blue, not a change of brightness: a bench page scrolling under the flag is
+  never that blue. Per click: click → sound, click → flag, sound − flag (the
+  lip-sync offset). `--tick SECS` sends no click and pairs each beep it hears
+  with the nearest flag: the offset alone, against a host in `tick`, or while
+  something else clicks (a `series.py` pass, whose page clicks raise the flag
+  and the beep).
+- Over ssh, `run-click-sound.ps1 -Tag t -Arguments '--tick 120 --window MoonlightWeb'`
+  runs it in the console session (a scheduled task), where the desktop, the
+  clicks and the user's audio are.
+- The loopback hears the stream with the output muted: the bench needs no
+  audible sound (checked on DualRTX, 05/10/2026).
 - **Counted**: the click's send to this machine's mixer (the loopback tap): the
   way up, the host's input, its beep through its mixer and loopback capture,
   the pacer, Opus, the relay, the network, the browser's jitter buffer and

@@ -17,6 +17,8 @@ receiving side (tcpdump -v on a Linux box, or pktmon) tells them apart:
   309   qwave_value        qWAVE QOSSetFlow(QOSSetOutgoingDSCPValue): the exact
                            value, Administrators or Network Configuration
                            Operators only
+  311-317 toggle           one socket, IP_TOS changed before every packet
+                           (EF, AF41, AF11, 0 in turn), as libjuice would
 
 usage: python win_dscp_probe.py <dest-ip> [dscp=46] [count=20] [port=9]
 Prints, per method, whether each call succeeded; the capture says the rest.
@@ -141,6 +143,24 @@ def method_cmsg(ip, port, dscp, count):
     return "WSASendMsg: %d of %d failed%s" % (errors, count, " (error %d)" % first_error if errors else "")
 
 
+def method_toggle(ip, port, dscp, count):
+    """One socket, the value changed before every packet, as libjuice does when
+    audio (EF), video and SCTP interleave: 311 EF, 313 AF41, 315 AF11, 317 0."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    plan = ((46, 311, b"e"), (34, 313, b"a"), (10, 315, b"d"), (0, 317, b"z"))
+    failed = 0
+    for _ in range(count):
+        for value, size, tag in plan:
+            try:
+                s.setsockopt(IPPROTO_IP, IP_TOS, value << 2)
+            except OSError:
+                failed += 1
+            s.sendto((tag * size)[:size], (ip, port))
+        time.sleep(0.01)
+    s.close()
+    return "4 values in turn, %d setsockopt failed" % failed
+
+
 def qos_flow(s, ip, port):
     if not qwave:
         return None, None, "no qwave.dll"
@@ -189,7 +209,8 @@ def main():
     admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
     print("to %s:%d, DSCP %d asked, %d packets each, admin=%s" % (ip, port, dscp, count, admin))
     for name, fn in (("plain 301", method_plain), ("ip_tos 303", method_ip_tos), ("cmsg 305", method_cmsg),
-                     ("qwave_type 307", method_qwave_type), ("qwave_value 309", method_qwave_value)):
+                     ("qwave_type 307", method_qwave_type), ("qwave_value 309", method_qwave_value),
+                     ("toggle 311-317", method_toggle)):
         try:
             note = fn(ip, port, dscp, count)
         except Exception as e:  # noqa: BLE001 — a probe reports, it does not stop
