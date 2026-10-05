@@ -104,6 +104,7 @@ import {
 import { drawCapFor } from '../stream/RenderPacing.js';
 import { ContentAgeProbe } from '../stream/ContentAgeProbe.js';
 import { FrameLog } from '../stream/FrameLog.js';
+import { AudioStatsSampler, findStreamAudioInbound } from '../stream/AudioStats.js';
 import { cropToAnnounced } from '../stream/FrameCrop.js';
 import { VsyncGrid } from '../stream/VsyncGrid.js';
 import { CadenceStepper, autostepEnabled, stepMemory } from '../stream/CadenceStepper.js';
@@ -1335,8 +1336,11 @@ export class StreamView {
         this._audioStatsTimer = null;
         this._audioJbMs = -1;
         this._audioJbAt = 0;
-        this._lastAudioJbDelay = 0;
-        this._lastAudioJbEmitted = 0;
+        // The rest of what NetEq does with the sound — its floor, the arrival
+        // jitter, the samples it made up — kept per second for the bench
+        // (`mwAudio.csv()`, stream/AudioStats.js) and shown under the buffer.
+        this._audioStats = new AudioStatsSampler();
+        if (!this._standby) window.mwAudio = this._audioStats;
         this._mediaFps = 0;
         this._mediaBitrateMbps = 0;
         // Per-tick latency samples, one window per stage (network RTT/2, jitter
@@ -3944,6 +3948,7 @@ export class StreamView {
         if (this._latencyProbe) window.mwLatency = this._latencyProbe;
         window.mwContentAge = this._contentAge;
         window.mwFrameLog = this._frameLog;
+        window.mwAudio = this._audioStats;
         window.mwVsyncGrid = this._vsyncGrid;
         if (this._rootEl) this._rootEl.style.visibility = '';
         // This leg is the live stream now, so it needs the full header — the
@@ -5460,19 +5465,12 @@ export class StreamView {
             if (!peer || typeof peer.getStats !== 'function') return;
             try {
                 const report = await peer.getStats();
-                let inbound = null;
-                report.forEach((s) => {
-                    if (s.type === 'inbound-rtp' && s.kind === 'audio') inbound = s;
-                });
+                // The stream's sound only, never an audio-road track (POC Ultra).
+                const inbound = findStreamAudioInbound(report, peer);
                 if (!inbound) return;
-                const delay = inbound.jitterBufferDelay || 0;
-                const emitted = inbound.jitterBufferEmittedCount || 0;
-                const dDelay = delay - this._lastAudioJbDelay;
-                const dEmitted = emitted - this._lastAudioJbEmitted;
-                this._lastAudioJbDelay = delay;
-                this._lastAudioJbEmitted = emitted;
-                if (dEmitted > 0 && dDelay >= 0) {
-                    this._audioJbMs = (dDelay / dEmitted) * 1000;
+                const row = this._audioStats.sample(inbound, performance.now());
+                if (row && row.bufferMs >= 0) {
+                    this._audioJbMs = row.bufferMs;
                     this._audioJbAt = performance.now();
                 }
             } catch (e) {
@@ -6315,6 +6313,25 @@ export class StreamView {
                 rows.push(
                     legRow(escapeHtml(t('stream.statLegAudio')), this._audioJbMs.toFixed(0) + 'ms'),
                 );
+                // Its floor (target / minimum NetEq held), the arrival jitter
+                // and the share of sound made up — the crackle — last second.
+                const a = this._audioStats.last;
+                if (a) {
+                    const ms = (v) => (v >= 0 ? v.toFixed(0) : '–');
+                    rows.push(
+                        legRow(
+                            escapeHtml(t('stream.statLegAudioDetail')),
+                            ms(a.targetMs) +
+                                ' / ' +
+                                ms(a.minimumMs) +
+                                ' · ' +
+                                (a.jitterMs >= 0 ? a.jitterMs.toFixed(1) : '–') +
+                                'ms · ' +
+                                AudioStatsSampler.concealedPercent(a).toFixed(2) +
+                                '%',
+                        ),
+                    );
+                }
             }
             if (haveLatency) {
                 avgLatency = latency.toFixed(1) + 'ms';
@@ -11869,6 +11886,7 @@ export class StreamView {
         if (this._contentAge.running) this._contentAge.stop();
         if (window.mwContentAge === this._contentAge) window.mwContentAge = null;
         if (window.mwFrameLog === this._frameLog) window.mwFrameLog = null;
+        if (window.mwAudio === this._audioStats) window.mwAudio = null;
         this._vsyncGrid.stop();
         if (window.mwVsyncGrid === this._vsyncGrid) window.mwVsyncGrid = null;
         if (this._stepper) {

@@ -746,6 +746,7 @@
         "statLegJitter": "Jitter buffer",
         "statLegMeasured": "Measured (host → drawn)",
         "statLegAudio": "Audio buffer",
+        "statLegAudioDetail": "Audio floor / min · jitter · made up",
         "statLegArrive": "Handoff",
         "statLegDecode": "Decode",
         "statLegQueue": "Render queue",

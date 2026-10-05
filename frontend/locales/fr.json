@@ -746,6 +746,7 @@
         "statLegJitter": "Tampon",
         "statLegMeasured": "Mesurée (hôte → dessin)",
         "statLegAudio": "Tampon audio",
+        "statLegAudioDetail": "Plancher audio / min · gigue · inventé",
         "statLegArrive": "Remise",
         "statLegDecode": "Décodage",
         "statLegQueue": "File rendu",

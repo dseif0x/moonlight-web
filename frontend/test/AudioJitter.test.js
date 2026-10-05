@@ -8,7 +8,12 @@
  * property, or a peer connection that refuses, costs nothing.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { AUDIO_JITTER_TARGET_MS, setAudioJitterBufferTarget } from '../js/util/AudioJitter.js';
+import {
+    AUDIO_JITTER_TARGET_MS,
+    audioJitterTargetMs,
+    setAudioJitterBufferTarget,
+    streamAudioReceivers,
+} from '../js/util/AudioJitter.js';
 
 const receiver = (kind, supported = true) => {
     const r = { track: { kind } };
@@ -56,5 +61,66 @@ describe('setAudioJitterBufferTarget', () => {
         expect(setAudioJitterBufferTarget(pc)).toBe(0);
         expect(warn).toHaveBeenCalled();
         warn.mockRestore();
+    });
+});
+
+describe('the stream sound only, never the audio road', () => {
+    const transceiver = (mid, receiverObj) => ({ mid, receiver: receiverObj });
+
+    it('leaves the vaudio and uaudio receivers alone (POC Ultra, audio road)', () => {
+        const sound = receiver('audio');
+        const vaudio = receiver('audio');
+        const uaudio = receiver('audio');
+        vaudio.jitterBufferTarget = 0;
+        uaudio.jitterBufferTarget = 0;
+        const pc = {
+            getReceivers: () => [sound, vaudio, uaudio],
+            getTransceivers: () => [
+                transceiver('audio', sound),
+                transceiver('vaudio', vaudio),
+                transceiver('uaudio', uaudio),
+            ],
+        };
+        expect(streamAudioReceivers(pc)).toEqual([sound]);
+        expect(setAudioJitterBufferTarget(pc, 60)).toBe(1);
+        expect(sound.jitterBufferTarget).toBe(60);
+        expect(vaudio.jitterBufferTarget).toBe(0);
+        expect(uaudio.jitterBufferTarget).toBe(0);
+    });
+
+    it('touches nothing when the target is off (null)', () => {
+        const sound = receiver('audio');
+        const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+        expect(setAudioJitterBufferTarget({ getReceivers: () => [sound] }, null)).toBe(0);
+        expect(sound.jitterBufferTarget).toBe(null);
+        info.mockRestore();
+    });
+});
+
+describe('audioJitterTargetMs, the bench key mw_audio_target', () => {
+    const store = (v) => ({ getItem: () => v });
+
+    it('is the default without the key, or with a value it cannot read', () => {
+        expect(audioJitterTargetMs(store(null))).toBe(AUDIO_JITTER_TARGET_MS);
+        expect(audioJitterTargetMs(store(''))).toBe(AUDIO_JITTER_TARGET_MS);
+        expect(audioJitterTargetMs(store('soon'))).toBe(AUDIO_JITTER_TARGET_MS);
+        expect(audioJitterTargetMs(store('-5'))).toBe(AUDIO_JITTER_TARGET_MS);
+        expect(audioJitterTargetMs(store('5000'))).toBe(AUDIO_JITTER_TARGET_MS);
+    });
+
+    it('reads a floor in whole ms, 0 included, and off as none at all', () => {
+        expect(audioJitterTargetMs(store('20'))).toBe(20);
+        expect(audioJitterTargetMs(store(' 33.9 '))).toBe(33);
+        expect(audioJitterTargetMs(store('0'))).toBe(0);
+        expect(audioJitterTargetMs(store('OFF'))).toBe(null);
+    });
+
+    it('survives a storage that throws', () => {
+        const broken = {
+            getItem: () => {
+                throw new Error('denied');
+            },
+        };
+        expect(audioJitterTargetMs(broken)).toBe(AUDIO_JITTER_TARGET_MS);
     });
 });

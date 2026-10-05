@@ -746,6 +746,7 @@
         "statLegJitter": "抖动缓冲",
         "statLegMeasured": "实测（主机 → 绘制）",
         "statLegAudio": "音频缓冲",
+        "statLegAudioDetail": "音频下限 / 最小 · 抖动 · 补偿",
         "statLegArrive": "交接",
         "statLegDecode": "解码",
         "statLegQueue": "渲染队列",
