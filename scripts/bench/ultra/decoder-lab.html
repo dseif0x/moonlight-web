@@ -22,6 +22,11 @@
       const ref = q.get("ref") || "0x10de";
       const maxFrames = Number(q.get("frames") || 60);
       const timing = Number(q.get("timing") || 200);
+      // One stage alone in the timed loop: dequant, idwt or pack.
+      const stages = q.get("stages") || undefined;
+      // Untimed decodes in the same submission before the timed one, so an
+      // idle GPU has its clocks up: a frame stream keeps it busy too.
+      const warm = Number(q.get("warm") || 0);
       const out = document.getElementById("log");
       const log = (s) => {
         out.textContent += s + "\n";
@@ -56,12 +61,18 @@
           se += d * d;
         }
         let maxDiffC = 0;
+        let maxDiffCAt = -1;
+        let badC = 0;
         for (let i = ySize; i < a.length; i++) {
           const d = Math.abs(a[i] - b[i]);
-          if (d > maxDiffC) maxDiffC = d;
+          if (d > 2) badC++;
+          if (d > maxDiffC) {
+            maxDiffC = d;
+            maxDiffCAt = i - ySize;
+          }
         }
         const psnr = se === 0 ? 99 : 10 * Math.log10((255 * 255 * ySize) / se);
-        return { maxDiff, maxDiffC, psnr };
+        return { maxDiff, maxDiffC, maxDiffCAt, badC, psnr };
       }
 
       const pct = (arr, p) => {
@@ -153,6 +164,8 @@
             ready,
             maxDiff: vsOracle.maxDiff,
             maxDiffC: vsOracle.maxDiffC,
+            maxDiffCAt: vsOracle.maxDiffCAt,
+            badC: vsOracle.badC,
             psnrVsOracle: vsOracle.psnr,
             psnrVsSource: vsSource.psnr,
           });
@@ -174,11 +187,19 @@
           for (let i = 0; i < timing; i++) {
             dec.decodedThisSeq = false;
             const enc = device.createCommandEncoder();
-            dec.decode(enc, {
-              querySet: qs,
-              beginningOfPassWriteIndex: 0,
-              endOfPassWriteIndex: 1,
-            });
+            for (let k = 0; k < warm; k++) {
+              dec.decode(enc, undefined, stages);
+              dec.decodedThisSeq = false;
+            }
+            dec.decode(
+              enc,
+              {
+                querySet: qs,
+                beginningOfPassWriteIndex: 0,
+                endOfPassWriteIndex: 1,
+              },
+              stages,
+            );
             enc.resolveQuerySet(qs, 0, 2, resolve, 0);
             enc.copyBufferToBuffer(resolve, 0, tsRead, 0, 16);
             device.queue.submit([enc.finish()]);
@@ -197,6 +218,8 @@
           clip,
           mbps,
           ref,
+          stages: stages || "all",
+          warm,
           width: w,
           height: h,
           frames: perFrame.length,

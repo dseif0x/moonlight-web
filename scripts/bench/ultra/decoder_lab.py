@@ -57,6 +57,8 @@ def main():
     ap.add_argument("--ref", default="0x10de")
     ap.add_argument("--frames", type=int, default=60)
     ap.add_argument("--timing", type=int, default=200)
+    ap.add_argument("--warm", type=int, default=0, help="untimed decodes before each timed one")
+    ap.add_argument("--stages", default="", help="time one stage alone: dequant, idwt or pack")
     ap.add_argument("--chrome-arg", action="append", default=[])
     ap.add_argument("--show", action="store_true", help="print each frame's line")
     a = ap.parse_args()
@@ -96,7 +98,7 @@ def main():
         for clip in a.clips.split(","):
             for mbps in a.mbps.split(","):
                 url = ("http://127.0.0.1:%d/scripts/bench/ultra/decoder-lab.html?clip=%s&mbps=%s&ref=%s"
-                       "&frames=%d&timing=%d" % (http_port, clip, mbps, a.ref, a.frames, a.timing))
+                       "&frames=%d&timing=%d&stages=%s&warm=%d" % (http_port, clip, mbps, a.ref, a.frames, a.timing, a.stages, a.warm))
                 call("Page.navigate", url=url)
                 time.sleep(1)
                 r = call("Runtime.evaluate", expression="window.__labResult", awaitPromise=True,
@@ -110,9 +112,9 @@ def main():
                     for f in res["perFrame"]:
                         print("  ", f)
                 g = res.get("gpuMs") or {}
-                print("%-15s %4s Mbit/s  %s  max diff Y %d C %d vs oracle (min PSNR %.1f dB), PSNR-Y vs "
+                print("%-15s %4s Mbit/s %-7s %s  max diff Y %d C %d vs oracle (min PSNR %.1f dB), PSNR-Y vs "
                       "source %.2f dB, ready %s, GPU decode p50 %s ms p99 %s ms%s"
-                      % (clip, mbps, res["adapter"], res["maxDiff"], res["maxDiffC"], res["minPsnrVsOracle"],
+                      % (clip, mbps, res.get("stages", ""), res["adapter"], res["maxDiff"], res["maxDiffC"], res["minPsnrVsOracle"],
                          res["meanPsnrVsSource"], res["allReady"],
                          "%.3f" % g["p50"] if g else "-", "%.3f" % g["p99"] if g else "-",
                          " ERRORS %s" % res["errors"] if res["errors"] else ""))

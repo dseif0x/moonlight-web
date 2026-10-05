@@ -16,8 +16,8 @@
 //   and the inverse wavelet reads them by index. Upstream's mirrored sampler
 //   with its coordinate offsets is the JPEG 2000 whole-sample symmetric
 //   extension of the interleaved signal; `mirror()` below does it directly.
-// - The inverse wavelet is two plain passes (rows, then columns) per level and
-//   component, with no shared-memory tile: correctness first, speed after.
+// - The inverse wavelet works on 32x32 tiles in workgroup memory, like
+//   upstream's, but in one dispatch per level for all components.
 //
 // Output: the decoded planes in f32 (Y at the aligned size, Cb and Cr at half
 // of it, before the DC shift), then `pack` turns them into 8-bit 4:2:0 bytes
@@ -177,16 +177,30 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) li: u
 }
 `;
 
-// One inverse CDF 9/7 lifting over a window of 10 samples of the interleaved
-// signal (low band at even, high band at odd positions), giving the two
-// samples in its middle. Constants and order are upstream's (dwt_common.h).
-const LIFT_WGSL = /* wgsl */ `
+// The inverse wavelet of one level, by 32x32 output tiles, the components
+// of the level along z.
+// A workgroup loads the four bands under its tile plus 4 samples of apron on
+// each side into workgroup memory as the interleaved 2D signal (LL at even x
+// and y, HL odd x, LH odd y, HH both odd), already scaled by K / 1/K in each
+// direction. It then runs the four CDF 9/7 lifting steps along the rows, then
+// along the columns, and writes the tile. Constants and step order are
+// upstream's (dwt_common.h, idwt.comp). Scaling and mirroring before the row
+// pass is the same as upstream's after it: both are per-row and linear.
+const IDWT_WGSL = /* wgsl */ `
+struct Pass { w: u32, h: u32, comps: u32, pad: u32, bands: array<vec4u, 3>, outs: vec4u }
+@group(0) @binding(0) var<uniform> p: Pass;
+@group(0) @binding(1) var<storage, read_write> coef: array<f32>;
+
 const ALPHA: f32 = -1.586134342059924;
 const BETA: f32 = -0.052980118572961;
 const GAMMA: f32 = 0.882911075530934;
 const DELTA: f32 = 0.443506852043971;
 const K: f32 = 1.230174104914001;
 const INV_K: f32 = 1.0 / 1.230174104914001;
+const SPAN: u32 = 40u;  // 32 + 2 x 4 of apron
+const T: u32 = 16u;  // the workgroup is T x T threads
+
+var<workgroup> S: array<f32, 1600>;
 
 // JPEG 2000 whole-sample symmetric extension of a signal of n samples.
 fn mirror(i: i32, n: i32) -> i32 {
@@ -196,74 +210,80 @@ fn mirror(i: i32, n: i32) -> i32 {
     return j;
 }
 
-fn lift(w: ptr<function, array<f32, 10>>) -> vec2f {
-    for (var j = 2; j <= 8; j += 2) { (*w)[j] -= DELTA * ((*w)[j - 1] + (*w)[j + 1]); }
-    for (var j = 3; j <= 7; j += 2) { (*w)[j] -= GAMMA * ((*w)[j - 1] + (*w)[j + 1]); }
-    for (var j = 4; j <= 6; j += 2) { (*w)[j] -= BETA * ((*w)[j - 1] + (*w)[j + 1]); }
-    (*w)[5] -= ALPHA * ((*w)[4] + (*w)[6]);
-    return vec2f((*w)[4], (*w)[5]);
-}
-`;
-
-// Rows: the four bands of a level (w x h each) become 2h rows of 2w samples.
-// Row 2y comes from LL and HL (vertical low-pass), row 2y+1 from LH and HH.
-const IDWT_ROWS_WGSL = /* wgsl */ `
-struct Pass { ll: u32, hl: u32, lh: u32, hh: u32, w: u32, h: u32, out: u32, final_: u32 }
-@group(0) @binding(0) var<uniform> p: Pass;
-@group(0) @binding(1) var<storage, read_write> coef: array<f32>;
-@group(0) @binding(2) var<storage, read_write> tmp: array<f32>;
-${LIFT_WGSL}
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) id: vec3u) {
-    let i = id.x;  // output pair along x
-    let r = id.y;  // tmp row
-    if (i >= p.w || r >= 2u * p.h) { return; }
-    let y = r >> 1u;
-    let lowBand = select(p.lh, p.ll, (r & 1u) == 0u);
-    let highBand = select(p.hh, p.hl, (r & 1u) == 0u);
-    let n = i32(2u * p.w);
-    var w: array<f32, 10>;
-    for (var j = 0; j < 10; j++) {
-        let s = mirror(i32(2u * i) - 4 + j, n);
-        if ((s & 1) == 0) {
-            w[j] = coef[lowBand + y * p.w + u32(s >> 1)] * K;
-        } else {
-            w[j] = coef[highBand + y * p.w + u32(s >> 1)] * INV_K;
+// One lifting step on positions first, first+2 .. last of every row (all 40)
+// or of the 32 tile columns. Threads walk 2D, with no integer division: the
+// AMD iGPU (2 CUs) pays dearly for a division by a value known at run time.
+fn liftRows(t: vec2u, first: u32, last: u32, c: f32) {
+    for (var r = t.y; r < SPAN; r += T) {
+        for (var j = first + 2u * t.x; j <= last; j += 2u * T) {
+            let i = r * SPAN + j;
+            S[i] -= c * (S[i - 1u] + S[i + 1u]);
         }
     }
-    let o = lift(&w);
-    tmp[r * 2u * p.w + 2u * i] = o.x;
-    tmp[r * 2u * p.w + 2u * i + 1u] = o.y;
+    workgroupBarrier();
 }
-`;
 
-// Columns: the 2h tmp rows (even = low, odd = high) become 2h output rows.
-const IDWT_COLS_WGSL = /* wgsl */ `
-struct Pass { ll: u32, hl: u32, lh: u32, hh: u32, w: u32, h: u32, out: u32, final_: u32 }
-@group(0) @binding(0) var<uniform> p: Pass;
-@group(0) @binding(1) var<storage, read_write> dst: array<f32>;
-@group(0) @binding(2) var<storage, read_write> tmp: array<f32>;
-${LIFT_WGSL}
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) id: vec3u) {
-    let x = id.x;  // column
-    let i = id.y;  // output pair along y
-    let width = 2u * p.w;
-    if (x >= width || i >= p.h) { return; }
-    let n = i32(2u * p.h);
-    var w: array<f32, 10>;
-    for (var j = 0; j < 10; j++) {
-        let s = mirror(i32(2u * i) - 4 + j, n);
-        let k = select(INV_K, K, (s & 1) == 0);
-        w[j] = tmp[u32(s) * width + x] * k;
+fn liftCols(t: vec2u, first: u32, last: u32, c: f32) {
+    for (var col = 4u + t.x; col < 36u; col += T) {
+        for (var j = first + 2u * t.y; j <= last; j += 2u * T) {
+            let i = j * SPAN + col;
+            S[i] -= c * (S[i - SPAN] + S[i + SPAN]);
+        }
     }
-    let o = lift(&w);
-    dst[p.out + (2u * i) * width + x] = o.x;
-    dst[p.out + (2u * i + 1u) * width + x] = o.y;
+    workgroupBarrier();
+}
+
+@compute @workgroup_size(16, 16)
+fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_id) lid: vec3u) {
+    let t = lid.xy;
+    let w2 = 2u * p.w;
+    let h2 = 2u * p.h;
+    let bands = p.bands[wg.z];  // LL, HL, LH, HH of this component
+    let dst = p.outs[wg.z];
+    let ox = i32(wg.x * 32u) - 4;
+    let oy = i32(wg.y * 32u) - 4;
+    for (var y = t.y; y < SPAN; y += T) {
+        let sy = mirror(oy + i32(y), i32(h2));
+        let yOdd = (sy & 1) == 1;
+        let row = u32(sy >> 1) * p.w;
+        for (var x = t.x; x < SPAN; x += T) {
+            let sx = mirror(ox + i32(x), i32(w2));
+            let xOdd = (sx & 1) == 1;
+            // select(), not bands[i]: a vector indexed at run time can turn
+            // into a scratch array in the HLSL that Chrome makes of this.
+            let band = select(select(bands.x, bands.y, xOdd), select(bands.z, bands.w, xOdd), yOdd);
+            let scale = select(K, INV_K, xOdd) * select(K, INV_K, yOdd);
+            S[y * SPAN + x] = coef[band + row + u32(sx >> 1)] * scale;
+        }
+    }
+    workgroupBarrier();
+
+    // Each step only where its inputs are right: the tile's 32 samples need
+    // 4 of apron after four steps.
+    liftRows(t, 2u, 38u, DELTA);
+    liftRows(t, 3u, 37u, GAMMA);
+    liftRows(t, 4u, 36u, BETA);
+    liftRows(t, 5u, 35u, ALPHA);
+    liftCols(t, 2u, 38u, DELTA);
+    liftCols(t, 3u, 37u, GAMMA);
+    liftCols(t, 4u, 36u, BETA);
+    liftCols(t, 5u, 35u, ALPHA);
+
+    for (var y = t.y; y < 32u; y += T) {
+        let gy = wg.y * 32u + y;
+        for (var x = t.x; x < 32u; x += T) {
+            let gx = wg.x * 32u + x;
+            if (gx < w2 && gy < h2) {
+                coef[dst + gy * w2 + gx] = S[(y + 4u) * SPAN + x + 4u];
+            }
+        }
+    }
 }
 `;
 
-// f32 planes (before the DC shift) to 8-bit 4:2:0, cropped: 4 pixels a thread.
+// f32 planes (before the DC shift) to 8-bit 4:2:0, cropped: one thread per
+// 4 bytes of a row, rows of Y, then Cb, then Cr (the width must be a
+// multiple of 8, so a chroma row is whole words).
 const PACK_WGSL = /* wgsl */ `
 struct Pack { yOff: u32, cbOff: u32, crOff: u32, alignedW: u32, width: u32, height: u32, pad0: u32, pad1: u32 }
 @group(0) @binding(0) var<uniform> p: Pack;
@@ -272,27 +292,31 @@ struct Pack { yOff: u32, cbOff: u32, crOff: u32, alignedW: u32, width: u32, heig
 fn q(v: f32) -> u32 { return u32(round(clamp(v + 0.5, 0.0, 1.0) * 255.0)); }
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) id: vec3u) {
-    let ySize = p.width * p.height;
-    let cw = p.width / 2u;
-    let cSize = cw * (p.height / 2u);
-    let word = id.x + id.y * 65535u * 64u;
-    let first = word * 4u;
-    if (first >= ySize + 2u * cSize) { return; }
-    var pw = 0u;
-    for (var k = 0u; k < 4u; k++) {
-        let b = first + k;
-        var v = 0.0;
-        if (b < ySize) {
-            v = planes[p.yOff + (b / p.width) * p.alignedW + b % p.width];
-        } else {
-            let c = b - ySize;
-            let plane = select(p.crOff, p.cbOff, c < cSize);
-            let cc = c % cSize;
-            v = planes[plane + (cc / cw) * (p.alignedW / 2u) + cc % cw];
-        }
-        pw = pw | (q(v) << (8u * k));
+    let r = id.y;
+    let ch = p.height / 2u;
+    var src: u32;
+    var dst: u32;
+    var words: u32;
+    if (r < p.height) {
+        words = p.width / 4u;
+        src = p.yOff + r * p.alignedW;
+        dst = r * words;
+    } else if (r < p.height + ch) {
+        words = p.width / 8u;
+        src = p.cbOff + (r - p.height) * (p.alignedW / 2u);
+        dst = p.width * p.height / 4u + (r - p.height) * words;
+    } else if (r < p.height + 2u * ch) {
+        words = p.width / 8u;
+        src = p.crOff + (r - p.height - ch) * (p.alignedW / 2u);
+        dst = p.width * p.height / 4u + ch * words + (r - p.height - ch) * words;
+    } else {
+        return;
     }
-    outBytes[word] = pw;
+    let x = id.x;
+    if (x >= words) { return; }
+    let s = src + 4u * x;
+    outBytes[dst + x] = q(planes[s]) | (q(planes[s + 1u]) << 8u) | (q(planes[s + 2u]) << 16u) |
+        (q(planes[s + 3u]) << 24u);
 }
 `;
 
@@ -370,7 +394,6 @@ export class PyroWaveDecoder {
             size: this.coefFloats * 4,
             usage: S | GPUBufferUsage.COPY_SRC,
         });
-        this.tmpBuf = d.createBuffer({ size: this.alignedW * this.alignedH * 4, usage: S });
         const packedBytes = (this.width * this.height * 3) / 2;
         this.packedBuf = d.createBuffer({
             size: alignUp(packedBytes, 4),
@@ -382,13 +405,9 @@ export class PyroWaveDecoder {
             layout: 'auto',
             compute: { module: mod(DEQUANT_WGSL), entryPoint: 'main' },
         });
-        this.rowsPipe = d.createComputePipeline({
+        this.idwtPipe = d.createComputePipeline({
             layout: 'auto',
-            compute: { module: mod(IDWT_ROWS_WGSL), entryPoint: 'main' },
-        });
-        this.colsPipe = d.createComputePipeline({
-            layout: 'auto',
-            compute: { module: mod(IDWT_COLS_WGSL), entryPoint: 'main' },
+            compute: { module: mod(IDWT_WGSL), entryPoint: 'main' },
         });
         this.packPipe = d.createComputePipeline({
             layout: 'auto',
@@ -396,21 +415,30 @@ export class PyroWaveDecoder {
         });
         this._bindDequant();
 
-        // One uniform slot per pass, all fixed at creation: decoding a frame
-        // only uploads the payload and the block offsets.
+        // One uniform slot per level, all fixed at creation: decoding a frame
+        // only uploads the payload and the block offsets. A level's components
+        // go in one dispatch (z): WebGPU puts a barrier between dispatches that
+        // write the same buffer, and on the AMD iGPU thirteen of them cost
+        // more than the transform itself (4 ms against 0.7 in Vulkan).
         this.passes = [];
         for (let level = LEVELS - 1; level >= 0; level--) {
+            const w = this.alignedW >> (level + 1);
+            const h = this.alignedH >> (level + 1);
+            const comps = level === 0 ? 1 : 3;
+            const bands = [];
+            const outs = [];
             for (let comp = 0; comp < 3; comp++) {
-                if (level === 0 && comp !== 0) continue;
-                const w = this.alignedW >> (level + 1);
-                const h = this.alignedH >> (level + 1);
-                let out;
-                if (level === 0) out = this.outY;
-                else if (level === 1 && comp !== 0) out = comp === 1 ? this.outCb : this.outCr;
-                else out = this.planeOf[`${level - 1},${comp},0`];
-                const band = (b) => this.planeOf[`${level},${comp},${b}`];
-                this.passes.push({ w, h, u: [band(0), band(1), band(2), band(3), w, h, out, 0] });
+                if (comp >= comps) {
+                    bands.push(0, 0, 0, 0);
+                    outs.push(0);
+                    continue;
+                }
+                for (let b = 0; b < 4; b++) bands.push(this.planeOf[`${level},${comp},${b}`]);
+                if (level === 0) outs.push(this.outY);
+                else if (level === 1 && comp !== 0) outs.push(comp === 1 ? this.outCb : this.outCr);
+                else outs.push(this.planeOf[`${level - 1},${comp},0`]);
             }
+            this.passes.push({ w, h, comps, u: [w, h, comps, 0, ...bands, ...outs, 0] });
         }
         const slot = 256;
         this.uniformBuf = d.createBuffer({
@@ -425,29 +453,20 @@ export class PyroWaveDecoder {
             (slot / 4) * packSlot,
         );
         d.queue.writeBuffer(this.uniformBuf, 0, u);
-        const ubo = (k) => ({ buffer: this.uniformBuf, offset: slot * k, size: 32 });
+        const ubo = (k, size) => ({ buffer: this.uniformBuf, offset: slot * k, size });
         for (const [k, pass] of this.passes.entries()) {
-            pass.rows = d.createBindGroup({
-                layout: this.rowsPipe.getBindGroupLayout(0),
+            pass.bind = d.createBindGroup({
+                layout: this.idwtPipe.getBindGroupLayout(0),
                 entries: [
-                    { binding: 0, resource: ubo(k) },
+                    { binding: 0, resource: ubo(k, 80) },
                     { binding: 1, resource: { buffer: this.coefBuf } },
-                    { binding: 2, resource: { buffer: this.tmpBuf } },
-                ],
-            });
-            pass.cols = d.createBindGroup({
-                layout: this.colsPipe.getBindGroupLayout(0),
-                entries: [
-                    { binding: 0, resource: ubo(k) },
-                    { binding: 1, resource: { buffer: this.coefBuf } },
-                    { binding: 2, resource: { buffer: this.tmpBuf } },
                 ],
             });
         }
         this.packBind = d.createBindGroup({
             layout: this.packPipe.getBindGroupLayout(0),
             entries: [
-                { binding: 0, resource: ubo(packSlot) },
+                { binding: 0, resource: ubo(packSlot, 32) },
                 { binding: 1, resource: { buffer: this.coefBuf } },
                 { binding: 2, resource: { buffer: this.packedBuf } },
             ],
@@ -556,30 +575,37 @@ export class PyroWaveDecoder {
     /**
      * Records the decode of the frame in progress into `encoder`, ending with
      * the 8-bit planes in `packedBuf`. `timestampWrites` (optional) brackets the pass.
+     * `stages` ('dequant', 'idwt', 'pack', or all when absent) is for the lab,
+     * to time one stage alone.
      */
-    decode(encoder, timestampWrites) {
+    decode(encoder, timestampWrites, stages) {
         const d = this.device;
+        const run = (s) => !stages || stages === s;
         d.queue.writeBuffer(this.payloadBuf, 0, this.payloadCpu, 0, alignUp(this.payloadWords, 1));
         d.queue.writeBuffer(this.offsetsBuf, 0, this.offsetsCpu);
         const pass = encoder.beginComputePass(timestampWrites ? { timestampWrites } : undefined);
-        pass.setPipeline(this.dequantPipe);
-        pass.setBindGroup(0, this.dequantBind);
-        pass.dispatchWorkgroups(this.blockCount);
-        for (const p of this.passes) {
-            pass.setPipeline(this.rowsPipe);
-            pass.setBindGroup(0, p.rows);
-            pass.dispatchWorkgroups(Math.ceil(p.w / 64), 2 * p.h);
-            pass.setPipeline(this.colsPipe);
-            pass.setBindGroup(0, p.cols);
-            pass.dispatchWorkgroups(Math.ceil((2 * p.w) / 64), p.h);
+        if (run('dequant')) {
+            pass.setPipeline(this.dequantPipe);
+            pass.setBindGroup(0, this.dequantBind);
+            pass.dispatchWorkgroups(this.blockCount);
         }
-        const words = Math.ceil((this.width * this.height * 3) / 2 / 4);
-        pass.setPipeline(this.packPipe);
-        pass.setBindGroup(0, this.packBind);
-        pass.dispatchWorkgroups(
-            Math.min(Math.ceil(words / 64), 65535),
-            Math.ceil(words / 64 / 65535),
-        );
+        if (run('idwt')) {
+            pass.setPipeline(this.idwtPipe);
+            for (const p of this.passes) {
+                pass.setBindGroup(0, p.bind);
+                pass.dispatchWorkgroups(
+                    Math.ceil((2 * p.w) / 32),
+                    Math.ceil((2 * p.h) / 32),
+                    p.comps,
+                );
+            }
+        }
+        if (run('pack')) {
+            pass.setPipeline(this.packPipe);
+            pass.setBindGroup(0, this.packBind);
+            // Rows: H of Y, then H/2 of Cb and H/2 of Cr.
+            pass.dispatchWorkgroups(Math.ceil(this.width / 4 / 64), this.height * 2);
+        }
         pass.end();
         this.decodedThisSeq = true;
     }
@@ -590,7 +616,6 @@ export class PyroWaveDecoder {
             this.offsetsBuf,
             this.metaBuf,
             this.coefBuf,
-            this.tmpBuf,
             this.packedBuf,
             this.uniformBuf,
         ]) {
