@@ -1145,6 +1145,63 @@ et vise un GPU par `--use-adapter-luid`.
   ainsi.
 - **La conversion en 8 bits** (0,6 ms sur l'AMD) ne sert qu'au labo. Le
   produit dessinera directement depuis les plans f32.
+- **Sur le 780M de l'UM790Pro** (05/10, 21:10), Chrome headless dans la
+  session minis, sans fenêtre : au plus 1 code d'écart avec l'oracle, et 2,0 ms
+  par image 1080p. Ce temps se répartit en 1,44 ms d'iDWT, environ 0,35 ms de
+  déquantification et 0,21 ms de conversion, qui ne sert qu'au labo. Dans le
+  produit, le décodage prendrait donc environ 1,8 ms : il tient dans le budget
+  de ce client.
+
+### 6.14 U2.5 : l'encodeur PyroWave en HLSL sur D3D12 (05/10/2026, soir)
+
+**L'encodeur** (`9c4ddb39`) :
+`backend/native-host/tools/pyrowave-d3d12/src/PyroWaveEncoder12.{h,cpp,hlsl}`.
+C'est la classe que reprendra l'encodeur Ultra du moteur (U4). Elle porte les
+six passes de l'amont : DWT, quantification, analyse et résolution du débit,
+assemblage. Le découpage en paquets se fait côté CPU, comme dans l'amont.
+- **SM 5.0, sans instruction de vague.** Les opérations de sous-groupe de
+  l'amont deviennent un thread par bloc 8×8 (la quantification) ou par bloc
+  32×32 (l'analyse et l'assemblage), qui travaille en série. Rien ne dépend de
+  la taille des vagues, alors que l'encodeur Vulkan de l'amont est faux sur
+  l'Arc. Le tout compile avec le `d3dcompiler` que le moteur utilise déjà.
+- **Ce qui diffère de l'amont.** Les coefficients sont en f32, et chaque
+  sous-bloc 4×2 a un emplacement fixe de 16 octets, sans allocation atomique.
+  Le flux n'est donc pas identique octet pour octet, mais sa qualité est la
+  même.
+- **Un outil autonome**, avec son propre dossier de build. Il ne touche pas à
+  `build/`, dont se servent les `--dev` des autres sessions.
+
+**Vérifié sur WARP** (le D3D12 logiciel), à 170 Mbit/s, sur 10 images :
+
+| Clip | PSNR-Y contre la source | Amont (oracle) | Débit obtenu |
+|---|---|---|---|
+| Texte | 33,39 dB | 33,38 dB | 169,97 Mbit/s |
+| Jeu | 51,64 dB | 51,63 dB | 169,98 Mbit/s |
+
+- Les 20 920 blocs ont exactement la taille qu'ils annoncent, et le décompte de
+  l'en-tête de trame est juste. Le décodeur WebGPU (§6.13) les lit.
+- La couche de débogage, avec la validation côté GPU, ne signale rien, à 170
+  comme à 60 Mbit/s.
+
+**Un incident, et ce qu'il a appris.** Le premier essai sur la RTX a provoqué
+sept réinitialisations du pilote NVIDIA (TDR, 20:27-20:28). La RTX pilote
+l'écran principal de Bruno. La prod et la `--dev` de la session Wi-Fi ont
+survécu. Deux défauts en étaient la cause :
+- **Une lecture hors du tampon.** Un descripteur racine n'a pas de taille, donc
+  rien ne borne un accès, et le compilateur peut exécuter les deux côtés d'une
+  branche. Les niveaux de la DWT qui lisent un plan LL calculaient quand même
+  une adresse dans la source 8 bits, hors de celle-ci. Chaque adresse est
+  désormais bornée dans son tampon.
+- **Un décalage variable de 24 bits qui donnait 0** (d3dcompiler + WARP). Les
+  octets se placent désormais par des décalages constants. Un auto-test
+  (`SelfTestCS`, `--selftest`) garde le cas.
+
+Depuis, l'outil tourne sur WARP sauf si `--vendor` désigne un GPU. Le passage
+sur un vrai GPU attend le feu vert du coordinateur.
+
+**Reste** : les temps GPU sur la RTX, l'Arc et l'iGPU AMD, au feu vert. Puis
+l'intégration (U4) : l'encodeur dans le moteur, la route audio comme transport,
+et le décodeur de §6.13 dans le client.
 
 ## 7. Concrètement, pour l'utilisateur
 
