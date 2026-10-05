@@ -171,6 +171,53 @@
           });
         }
 
+        // The product's presentation path, checked once: the last frame drawn
+        // by present() into a WebGPU OffscreenCanvas, made a VideoFrame, drawn
+        // on a Canvas2D, against the same conversion done here on the oracle's
+        // decode of that frame (BT.709 limited).
+        let presentMaxDiff = null;
+        if (q.get("present") === "1") {
+          const off = new OffscreenCanvas(w, h);
+          const gctx = off.getContext("webgpu");
+          gctx.configure({ device, format: "rgba8unorm", alphaMode: "opaque" });
+          dec.decodedThisSeq = false;
+          const enc = device.createCommandEncoder();
+          dec.decode(enc);
+          dec.present(enc, gctx, true);
+          device.queue.submit([enc.finish()]);
+          await device.queue.onSubmittedWorkDone();
+          const vf = new VideoFrame(off, { timestamp: 0 });
+          const c2 = new OffscreenCanvas(w, h);
+          const ctx2 = c2.getContext("2d");
+          ctx2.drawImage(vf, 0, 0);
+          vf.close();
+          const px = ctx2.getImageData(0, 0, w, h).data;
+          const ref = oracle[frames.length - 1];
+          const cw = w / 2;
+          const cOff = w * h;
+          const crOff = cOff + cw * (h / 2);
+          const clamp = (v) => Math.min(255, Math.max(0, v));
+          let maxDiff = 0;
+          for (let y = 0; y < h; y += 7) {
+            for (let x = 0; x < w; x += 7) {
+              const yy = (ref[y * w + x] - 16) / 219;
+              const ci = (y >> 1) * cw + (x >> 1);
+              const cb = (ref[cOff + ci] - 128) / 224;
+              const cr = (ref[crOff + ci] - 128) / 224;
+              const rgb = [
+                yy + 1.5748 * cr,
+                yy - 0.1873 * cb - 0.4681 * cr,
+                yy + 1.8556 * cb,
+              ].map((v) => clamp(Math.round(v * 255)));
+              const at = (y * w + x) * 4;
+              for (let k = 0; k < 3; k++)
+                maxDiff = Math.max(maxDiff, Math.abs(px[at + k] - rgb[k]));
+            }
+          }
+          presentMaxDiff = maxDiff;
+          log(`present: max RGB diff ${maxDiff} (sampled 1 px in 49)`);
+        }
+
         // GPU time of the decode, the same frame again and again.
         let gpuMs = [];
         let badTimestamps = 0;
@@ -240,6 +287,7 @@
               }
             : null,
           errors,
+          presentMaxDiff,
           perFrame,
         };
         log(JSON.stringify({ ...res, perFrame: undefined }));

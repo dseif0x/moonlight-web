@@ -320,6 +320,40 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 }
 `;
 
+// The decoded planes (f32, before the DC shift) drawn as RGB: a full-screen
+// triangle whose fragment reads Y at its pixel and Cb, Cr at half resolution
+// (nearest), BT.709, limited or full range.
+const PRESENT_WGSL = /* wgsl */ `
+struct Present { yOff: u32, cbOff: u32, crOff: u32, alignedW: u32, width: u32, height: u32, limited: u32, pad: u32 }
+@group(0) @binding(0) var<uniform> p: Present;
+@group(0) @binding(1) var<storage, read> planes: array<f32>;
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let uv = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4f(uv * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0), 0.0, 1.0);
+}
+
+@fragment
+fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+    let x = min(u32(pos.x), p.width - 1u);
+    let y = min(u32(pos.y), p.height - 1u);
+    let c = (y >> 1u) * (p.alignedW >> 1u) + (x >> 1u);
+    var yv = clamp(planes[p.yOff + y * p.alignedW + x] + 0.5, 0.0, 1.0);
+    var cb = clamp(planes[p.cbOff + c] + 0.5, 0.0, 1.0) - 0.5;
+    var cr = clamp(planes[p.crOff + c] + 0.5, 0.0, 1.0) - 0.5;
+    if (p.limited != 0u) {
+        yv = (yv * 255.0 - 16.0) / 219.0;
+        cb = cb * 255.0 / 224.0;
+        cr = cr * 255.0 / 224.0;
+    }
+    let r = yv + 1.5748 * cr;
+    let g = yv - 0.1873 * cb - 0.4681 * cr;
+    let b = yv + 1.8556 * cb;
+    return vec4f(clamp(vec3f(r, g, b), vec3f(0.0), vec3f(1.0)), 1.0);
+}
+`;
+
 export class PyroWaveDecoder {
     /**
      * @param {GPUDevice} device
@@ -610,6 +644,71 @@ export class PyroWaveDecoder {
         this.decodedThisSeq = true;
     }
 
+    /**
+     * Draws the last decoded frame into a WebGPU canvas context (configured
+     * by the caller, any 8-bit RGBA format), recorded into `encoder` after
+     * decode(). `limited`: the planes are BT.709 limited range (the host's
+     * NV12), else full range.
+     */
+    present(encoder, context, limited = true) {
+        const d = this.device;
+        const format =
+            context.getConfiguration?.()?.format || navigator.gpu.getPreferredCanvasFormat();
+        if (!this._presentPipe || this._presentFormat !== format) {
+            const module = d.createShaderModule({ code: PRESENT_WGSL });
+            this._presentPipe = d.createRenderPipeline({
+                layout: 'auto',
+                vertex: { module, entryPoint: 'vs' },
+                fragment: { module, entryPoint: 'fs', targets: [{ format }] },
+                primitive: { topology: 'triangle-list' },
+            });
+            this._presentFormat = format;
+            this._presentUbo = d.createBuffer({
+                size: 32,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+            this._presentBind = d.createBindGroup({
+                layout: this._presentPipe.getBindGroupLayout(0),
+                entries: [
+                    { binding: 0, resource: { buffer: this._presentUbo } },
+                    { binding: 1, resource: { buffer: this.coefBuf } },
+                ],
+            });
+            this._presentLimited = undefined;
+        }
+        if (this._presentLimited !== limited) {
+            d.queue.writeBuffer(
+                this._presentUbo,
+                0,
+                new Uint32Array([
+                    this.outY,
+                    this.outCb,
+                    this.outCr,
+                    this.alignedW,
+                    this.width,
+                    this.height,
+                    limited ? 1 : 0,
+                    0,
+                ]),
+            );
+            this._presentLimited = limited;
+        }
+        const pass = encoder.beginRenderPass({
+            colorAttachments: [
+                {
+                    view: context.getCurrentTexture().createView(),
+                    loadOp: 'clear',
+                    storeOp: 'store',
+                    clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                },
+            ],
+        });
+        pass.setPipeline(this._presentPipe);
+        pass.setBindGroup(0, this._presentBind);
+        pass.draw(3);
+        pass.end();
+    }
+
     destroy() {
         for (const b of [
             this.payloadBuf,
@@ -618,7 +717,8 @@ export class PyroWaveDecoder {
             this.coefBuf,
             this.packedBuf,
             this.uniformBuf,
-        ]) {
+            this._presentUbo,
+        ].filter(Boolean)) {
             b.destroy();
         }
     }
