@@ -1139,9 +1139,10 @@ et vise un GPU par `--use-adapter-luid`.
   4 texels d'un coup par `textureGather`, laisse le matériel faire le miroir,
   et calcule en FP16. Ce sera la piste à suivre, à mesurer d'abord sur le 780M
   de l'UM790Pro (12 CU), un vrai client Ultra.
-- **À regarder** : sans les contrôles de bornes de Chrome
-  (`disable_robustness`), la sortie devient fausse. Un accès hors limites
-  existe donc, et ces contrôles le masquent.
+- **Sans les contrôles de bornes de Chrome** (`disable_robustness`), la version
+  committée reste juste, sur la RTX comme sur l'AMD. Elle ne fait donc aucun
+  accès hors limites. Une version intermédiaire, sans tuiles, sortait faux
+  ainsi.
 - **La conversion en 8 bits** (0,6 ms sur l'AMD) ne sert qu'au labo. Le
   produit dessinera directement depuis les plans f32.
 
