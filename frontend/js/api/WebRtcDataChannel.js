@@ -32,6 +32,7 @@ import { defaultIceServers } from './IceServers.js';
 import { isViewMessage } from './hostMessages.js';
 import { attachFloodCounter, floodMode } from './FloodCounter.js';
 import { attachUltraSink, ultraSinkMode } from './UltraSink.js';
+import { RtpStallWatch, receivedPackets, rtpStallWatchOn } from './RtpStallWatch.js';
 import { attachRtpVideo, passEncodedAudio, rtpLegacyApi } from './RtpVideo.js';
 import { closeHidChannel, createHidChannel, sendHidFrame } from '../hid/hidWire.js';
 import { setAudioJitterBufferTarget } from '../util/AudioJitter.js';
@@ -700,6 +701,10 @@ export class WebRtcDataChannel {
         // Clear reassembly buffers
         this._reassembly.clear();
 
+        if (this._rtpStallWatch) {
+            this._rtpStallWatch.stop();
+            this._rtpStallWatch = null;
+        }
         if (this._rtpVideo) {
             for (const rtp of this._rtpVideo) rtp.stop();
             this._rtpVideo = null;
@@ -770,6 +775,7 @@ export class WebRtcDataChannel {
      * until then the frames from the latest keyframe on are held.
      */
     _onRtpVideoFrame(frame, isKeyframe, backendTs, lost = false, frameId = undefined) {
+        if (this._rtpStallWatch) this._rtpStallWatch.noteFrame();
         // A keyframe closes the request, as on the DataChannel path.
         if (isKeyframe) {
             this._idrOutstanding = false;
@@ -864,6 +870,24 @@ export class WebRtcDataChannel {
                     },
                 });
                 (this._rtpVideo ||= []).push(rtp);
+                // A video track Chrome stopped feeding (a loss, its PLI ignored
+                // by the host): packets in, no frame out — ask a keyframe.
+                // Bench key mw_rtp_stallwatch=0 turns it off (a "before" pass).
+                if (
+                    evt.track.kind === 'video' &&
+                    evt.transceiver?.mid === 'video' &&
+                    !this._rtpStallWatch &&
+                    rtpStallWatchOn()
+                ) {
+                    this._rtpStallWatch = new RtpStallWatch({
+                        packets: () => receivedPackets(evt.receiver),
+                        onStall: () => {
+                            if (this.connected)
+                                this._requestIdrFrame('RTP video track stalled', true);
+                        },
+                    });
+                    this._rtpStallWatch.start(250);
+                }
                 return;
             }
             if (evt.track.kind !== 'audio') return;
