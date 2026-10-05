@@ -28,13 +28,13 @@
 #include <string>
 #include <vector>
 
-namespace mw::ultra {
+namespace mw::native::encode {
 
 // Encodes 8-bit 4:2:0 pictures to PyroWave on a D3D12 compute queue.
 //
 //   init()     once per size
-//   record()   the picture (Y, then Cb, then Cr, 8-bit, tightly packed, in a
-//              buffer in NON_PIXEL_SHADER_RESOURCE state) to the stream, and
+//   record()   the picture (8-bit 4:2:0 in a buffer in NON_PIXEL_SHADER_RESOURCE
+//              state, laid out as a SourceLayout says) to the stream, and
 //              copies of what the CPU needs into readback memory
 //   packets()  after the GPU is done: the frame, cut into network packets
 class PyroWaveEncoder12
@@ -47,12 +47,25 @@ public:
         double total() const { return dwt + quant + analyze + resolve + pack; }
     };
 
+    // Where the picture's samples sit in the source buffer, in bytes. Planar
+    // (Y, then Cb, then Cr: a Y4M frame) or NV12 as copied from a texture
+    // (Cb and Cr interleaved: crOffset = cbOffset + 1).
+    struct SourceLayout
+    {
+        uint32_t yOffset = 0, yPitch = 0;
+        uint32_t cbOffset = 0, crOffset = 0, cPitch = 0;
+        bool interleaved = false;
+        uint32_t bytes = 0; // the buffer's size, every read is kept inside it
+    };
+    static SourceLayout planar(int width, int height);
+
     bool init(ID3D12Device* device, int width, int height, std::string* error);
 
     // `targetBytes`: the frame may not exceed it (the rate control's bound).
     // `timestamps`: a heap of at least 6 queries, written from `firstQuery`.
-    void record(ID3D12GraphicsCommandList* cmd, ID3D12Resource* source, size_t targetBytes,
-                ID3D12QueryHeap* timestamps, UINT firstQuery, ID3D12Resource* timestampReadback);
+    void record(ID3D12GraphicsCommandList* cmd, ID3D12Resource* source, const SourceLayout& layout,
+                size_t targetBytes, ID3D12QueryHeap* timestamps, UINT firstQuery,
+                ID3D12Resource* timestampReadback);
 
     // The frame as packets of at most `packetBoundary` bytes (a block is never
     // split: a block larger than the boundary is a packet of its own), the
@@ -116,4 +129,4 @@ private:
         m_QuantBuf, m_Stream, m_Packets, m_StreamReadback, m_PacketsReadback;
 };
 
-} // namespace mw::ultra
+} // namespace mw::native::encode

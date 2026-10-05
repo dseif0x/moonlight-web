@@ -33,7 +33,7 @@
 
 using Microsoft::WRL::ComPtr;
 
-namespace mw::ultra {
+namespace mw::native::encode {
 
 namespace {
 
@@ -305,8 +305,22 @@ bool PyroWaveEncoder12::init(ID3D12Device* device, int width, int height, std::s
     return true;
 }
 
+PyroWaveEncoder12::SourceLayout PyroWaveEncoder12::planar(int width, int height)
+{
+    SourceLayout l;
+    const uint32_t w = uint32_t(width), h = uint32_t(height);
+    l.yOffset = 0;
+    l.yPitch = w;
+    l.cbOffset = w * h;
+    l.crOffset = w * h + (w / 2) * (h / 2);
+    l.cPitch = w / 2;
+    l.bytes = w * h * 3 / 2;
+    return l;
+}
+
 void PyroWaveEncoder12::record(ID3D12GraphicsCommandList* cmd, ID3D12Resource* source,
-                               size_t targetBytes, ID3D12QueryHeap* timestamps, UINT q,
+                               const SourceLayout& src, size_t targetBytes,
+                               ID3D12QueryHeap* timestamps, UINT q,
                                ID3D12Resource* timestampReadback)
 {
     m_Sequence = (m_Sequence + 1) & kSequenceMask;
@@ -346,11 +360,12 @@ void PyroWaveEncoder12::record(ID3D12GraphicsCommandList* cmd, ID3D12Resource* s
             if (level == 0 && c != 0) continue;
             uint32_t rw, rh, nw, nh, kind, off, stride;
             if (level == 0) { // the luma plane
-                rw = w, rh = h, nw = W, nh = H, kind = 0, off = 0, stride = w;
+                rw = w, rh = h, nw = W, nh = H, kind = 0, off = src.yOffset, stride = src.yPitch;
             } else if (level == 1 && c != 0) { // a chroma plane: 4:2:0 starts here
-                rw = w / 2, rh = h / 2, nw = W / 2, nh = H / 2, kind = 0;
-                off = w * h + (c == 2 ? (w / 2) * (h / 2) : 0);
-                stride = w / 2;
+                rw = w / 2, rh = h / 2, nw = W / 2, nh = H / 2;
+                kind = src.interleaved ? 2 : 0;
+                off = c == 1 ? src.cbOffset : src.crOffset;
+                stride = src.cPitch;
             } else { // the LL band of the level above
                 nw = W >> level, nh = H >> level, rw = nw, rh = nh, kind = 1;
                 off = m_PlaneOf[level - 1][c][0];
@@ -358,7 +373,7 @@ void PyroWaveEncoder12::record(ID3D12GraphicsCommandList* cmd, ID3D12Resource* s
             }
             const uint32_t* p = m_PlaneOf[level][c];
             constants({rw, rh, nw, nh, kind, off, stride, p[0], p[1], p[2], p[3], nw / 2, nh / 2,
-                       uint32_t(sourceBytes()), m_CoefFloats});
+                       src.bytes, m_CoefFloats});
             cmd->Dispatch(groups(nw, 32), groups(nh, 32), 1);
         }
         cmd->ResourceBarrier(1, &uav);
@@ -520,4 +535,4 @@ bool PyroWaveEncoder12::packets(size_t boundary, std::vector<std::vector<uint8_t
     return ok;
 }
 
-} // namespace mw::ultra
+} // namespace mw::native::encode

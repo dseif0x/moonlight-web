@@ -200,7 +200,7 @@ int encode(const char* in, const char* out, double mbps, size_t packet, uint32_t
     uint64_t frequency = 0;
     queue->GetTimestampFrequency(&frequency);
 
-    mw::ultra::PyroWaveEncoder12 enc;
+    mw::native::encode::PyroWaveEncoder12 enc;
     std::string error;
     if (!enc.init(device.Get(), y.width, y.height, &error))
         return std::fprintf(stderr, "init: %s\n", error.c_str()), 4;
@@ -269,7 +269,9 @@ int encode(const char* in, const char* out, double mbps, size_t packet, uint32_t
                                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             cmd->ResourceBarrier(1, &toRead);
         }
-        enc.record(cmd.Get(), source.Get(), target, timestamps.Get(), 0, tsReadback.Get());
+        enc.record(cmd.Get(), source.Get(),
+                   mw::native::encode::PyroWaveEncoder12::planar(y.width, y.height), target,
+                   timestamps.Get(), 0, tsReadback.Get());
         cmd->Close();
         ID3D12CommandList* lists[] = {cmd.Get()};
         queue->ExecuteCommandLists(1, lists);
@@ -315,9 +317,10 @@ int encode(const char* in, const char* out, double mbps, size_t packet, uint32_t
         for (int r = 0; r < repeat; r++) {
             submit(false);
             gpu.push_back(
-                mw::ultra::PyroWaveEncoder12::stageTimes(tsReadback.Get(), 0, frequency).total());
+                mw::native::encode::PyroWaveEncoder12::stageTimes(tsReadback.Get(), 0, frequency)
+                    .total());
         }
-        auto t = mw::ultra::PyroWaveEncoder12::stageTimes(tsReadback.Get(), 0, frequency);
+        auto t = mw::native::encode::PyroWaveEncoder12::stageTimes(tsReadback.Get(), 0, frequency);
         if (debug) dumpMessages(device.Get());
         if (HRESULT removed = device->GetDeviceRemovedReason(); FAILED(removed))
             return std::fprintf(stderr, "frame %u: device removed (0x%08lx)\n", frames,

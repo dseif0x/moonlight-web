@@ -82,6 +82,7 @@ uint toLane(uint b, uint k)
 // that is what upstream's sampler coordinates do.
 //   c0 c1  real size of the input (R)       c2 c3  aligned size (N)
 //   c4     0: 8-bit plane in Src, DC shift  1: f32 plane in Coef (an LL band)
+//          2: 8-bit samples two bytes apart in Src (NV12's interleaved chroma)
 //   c5 c6  source offset, row stride        c7..c10 LL HL LH HH plane offsets
 //   c11 c12 band size (N / 2)          c13 Src size in bytes   c14 Coef size in floats
 
@@ -104,8 +105,8 @@ float dwtInput(int x, int y)
 {
     uint mx = (uint)min(mirrorIndex(x, (int)c2), (int)c0 - 1);
     uint my = (uint)min(mirrorIndex(y, (int)c3), (int)c1 - 1);
-    uint i = c5 + my * c6 + mx;
-    [branch] if (c4 == 0) {
+    uint i = c5 + my * c6 + mx * (c4 == 2 ? 2 : 1);
+    [branch] if (c4 != 1) {
         uint a = min(i, c13 - 1);
         uint w = Src.Load(a & ~3u);
         return float(byteOf(w, a & 3u)) * (1.0 / 255.0) - 0.5;
