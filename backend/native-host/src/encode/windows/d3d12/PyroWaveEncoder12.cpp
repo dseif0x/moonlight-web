@@ -101,7 +101,7 @@ float rdoDistortionScale(int level, int component, int band)
     constexpr float viewingDistance = 1.0f;
     constexpr float cpdNyquist = 0.34f * viewingDistance * dpi;
     float cpd = std::sqrt(horiz * horiz + vert * vert) * cpdNyquist * std::exp2(-float(level));
-    cpd = std::max(cpd, 8.0f);
+    cpd = (std::max)(cpd, 8.0f);
     float csf = 2.6f * (0.0192f + 0.114f * cpd) * std::exp(-std::pow(0.114f * cpd, 1.1f));
     if (component != 0 && level != kLevels - 1) csf *= 0.6f;
     float weighted = csf * noiseNormalizedResolution(level, component, band);
@@ -137,7 +137,7 @@ ComPtr<ID3D12Resource> PyroWaveEncoder12::buffer(uint64_t size, D3D12_HEAP_TYPE 
     hp.Type = heap;
     D3D12_RESOURCE_DESC desc = {};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = std::max<uint64_t>(size, 256);
+    desc.Width = (std::max<uint64_t>)(size, 256);
     desc.Height = 1;
     desc.DepthOrArraySize = 1;
     desc.MipLevels = 1;
@@ -188,7 +188,7 @@ void PyroWaveEncoder12::layout()
                 band.first32 = m_Blocks32;
                 m_Blocks8 += band.blocks8x * band.blocks8y;
                 m_Blocks32 += band.blocks32x * band.blocks32y;
-                float res = std::min(4096.0f, noiseNormalizedResolution(level, c, b));
+                float res = (std::min)(4096.0f, noiseNormalizedResolution(level, c, b));
                 band.quantCode = encodeQuant(1.0f / res);
                 band.quantResolution = 1.0f / decodeQuant(band.quantCode);
                 band.rdoScale = rdoDistortionScale(level, c, b) * (1.0f / 256.0f);
@@ -271,8 +271,8 @@ bool PyroWaveEncoder12::init(ID3D12Device* device, int width, int height, std::s
     m_Device = device;
     m_Width = width;
     m_Height = height;
-    m_AlignedW = std::max(alignUp(width, kAlign), kMinSize);
-    m_AlignedH = std::max(alignUp(height, kAlign), kMinSize);
+    m_AlignedW = (std::max)(alignUp(width, kAlign), kMinSize);
+    m_AlignedH = (std::max)(alignUp(height, kAlign), kMinSize);
     layout();
     if (m_Blocks32 > 0xffff) {
         // The rate control packs a block index in 16 bits, as upstream does.
@@ -349,7 +349,7 @@ void PyroWaveEncoder12::record(ID3D12GraphicsCommandList* cmd, ID3D12Resource* s
     cmd->SetPipelineState(m_Clear.Get());
     const uint32_t bucketWords = m_BucketBytes / 4;
     constants({bucketWords, m_Blocks32});
-    cmd->Dispatch(groups(std::max(bucketWords, m_Blocks32), 64), 1, 1);
+    cmd->Dispatch(groups((std::max)(bucketWords, m_Blocks32), 64), 1, 1);
 
     // Forward DWT, level by level; a level's components run side by side.
     cmd->SetPipelineState(m_Dwt.Get());

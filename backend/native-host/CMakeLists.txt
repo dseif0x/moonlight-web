@@ -87,6 +87,8 @@ if(WIN32)
         src/encode/windows/d3d12/VideoEncode12.cpp
         src/encode/windows/d3d12/NvencEncoder12.cpp
         src/encode/windows/d3d12/AmfEncoder12.cpp
+        src/encode/windows/d3d12/PyroWaveEncoder12.cpp
+        src/encode/windows/d3d12/UltraEncoder12.cpp
         src/audio/windows/WasapiLoopback.cpp
         src/audio/windows/HostMute.cpp
     )
@@ -115,6 +117,18 @@ if(WIN32)
     # are static tables of GUID constants (the media types, and the ICodecAPI
     # properties). `mfplat.dll` itself is loaded at run time (MfApi.h) so that
     # an N edition of Windows — where it is simply absent — still starts.
+    # POC Ultra: PyroWaveEncoder12's HLSL, embedded as a string at configure
+    # time and compiled at run time by d3dcompiler (shader model 5.0), as the
+    # conversion's shaders are.
+    set(_mw_pyrowave_hlsl ${CMAKE_CURRENT_SOURCE_DIR}/src/encode/windows/d3d12/PyroWaveEncoder12.hlsl)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_mw_pyrowave_hlsl})
+    file(READ ${_mw_pyrowave_hlsl} _mw_pyrowave_hex HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _mw_pyrowave_bytes "${_mw_pyrowave_hex}")
+    file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/generated/PyroWaveEncoder12Hlsl.h
+         "// Generated from PyroWaveEncoder12.hlsl at configure time.\n#pragma once\n"
+         "static const char kPyroWaveEncoderHlsl[] = {${_mw_pyrowave_bytes}0x00};\n")
+    target_include_directories(mw-native-host PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+
     target_link_libraries(mw-native-host PRIVATE dxgi d3d11 d3d12 d3dcompiler user32 gdi32 setupapi
                                                  avrt ole32 oleaut32 runtimeobject mfuuid
                                                  strmiids)

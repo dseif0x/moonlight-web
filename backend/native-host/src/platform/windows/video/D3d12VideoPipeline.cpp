@@ -22,6 +22,7 @@
 #include "../../../core/VideoPipelineChoice.h"
 #include "../../../encode/windows/d3d12/AmfEncoder12.h"
 #include "../../../encode/windows/d3d12/NvencEncoder12.h"
+#include "../../../encode/windows/d3d12/UltraEncoder12.h"
 #include "../../../encode/windows/d3d12/VideoEncode12.h"
 
 #include <avrt.h>
@@ -368,6 +369,9 @@ bool D3d12VideoPipeline::buildEncoder(const capture::IWindowsCapture& capture,
             break;
         case EncoderTuning::Encoder12::Amf:
             encoder = std::make_unique<encode::AmfEncoder12>();
+            break;
+        case EncoderTuning::Encoder12::Pyrowave:
+            encoder = std::make_unique<encode::UltraEncoder12>();
             break;
         default: encoder = std::make_unique<encode::VideoEncode12>(); break;
         }

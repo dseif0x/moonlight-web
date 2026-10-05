@@ -237,7 +237,9 @@ struct EncoderTuning
         Default,
         VideoEncode,
         Nvenc,
-        Amf
+        Amf,
+        /// POC Ultra (U4): PyroWave on a compute queue, any GPU of the route.
+        Pyrowave
     };
     Encoder12 enc12 = Encoder12::Default;
     /// D3D12 Video Encode's rate control: the driver's CBR where it can move
@@ -412,6 +414,10 @@ struct EncoderTuning
     /// Its channel: the video channel's reliability (ordered, given up on after
     /// 500 ms; the default), or unordered with no retransmission.
     bool ultraUnordered = false;
+    /// POC Ultra U4: the rate of the PyroWave encoder (enc12=pyrowave) in
+    /// Mbit/s; 0, its own default (170, PyroWave's published threshold at
+    /// 1080p60). The session's adaptive bitrate does not move it.
+    int ultraMbps = 0;
     /// Each video frame's way through the relay, written as a CSV next to the
     /// log when the session ends (plan « Wi-Fi : la vidéo qui attend dans
     /// SCTP », W1). false, the product: nothing kept.
@@ -489,9 +495,10 @@ struct EncoderTuning
                prioVk == PriorityVk::Default && portalDmabuf == Choice::Default &&
                mutterDirect == Choice::Default && lossPermille == 0 && lossBurst == 0 &&
                sctpCongestion < 0 && floodKbps == 0 && floodBytes == 0 && !floodLikeVideo &&
-               ultraSynthKb == 0 && !ultraUnordered && !relayLog && paceMultiple == 0 &&
-               paceBurstKb == 0 && retransCutPermille < 0 && sctpBufferKb == 0 && linkHoldMs == 0 &&
-               sctpMaxBurst < 0 && sctpScheduler < 0 && !audioLog;
+               ultraSynthKb == 0 && !ultraUnordered && ultraMbps == 0 && !relayLog &&
+               paceMultiple == 0 && paceBurstKb == 0 && retransCutPermille < 0 &&
+               sctpBufferKb == 0 && linkHoldMs == 0 && sctpMaxBurst < 0 && sctpScheduler < 0 &&
+               !audioLog;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -554,6 +561,7 @@ struct EncoderTuning
         if (enc12 == Encoder12::VideoEncode) add("enc12=ve");
         if (enc12 == Encoder12::Nvenc) add("enc12=nvenc");
         if (enc12 == Encoder12::Amf) add("enc12=amf");
+        if (enc12 == Encoder12::Pyrowave) add("enc12=pyrowave");
         if (rc12 == RateControl12::Driver) add("rc12=driver");
         if (rc12 == RateControl12::Qp) add("rc12=qp");
         if (reencode12 != Choice::Default) add(std::string("reencode=") + choice(reencode12));
@@ -591,6 +599,7 @@ struct EncoderTuning
         if (floodBytes > 0) add("floodsize=" + std::to_string(floodBytes));
         if (floodLikeVideo) add("floodchannel=video");
         if (ultraSynthKb > 0) add("ultra=synthetic:" + std::to_string(ultraSynthKb));
+        if (ultraMbps > 0) add("ultrambps=" + std::to_string(ultraMbps));
         if (ultraUnordered) add("ultrachannel=unordered");
         if (relayLog) add("relaylog=1");
         if (paceMultiple > 0) add("pace=" + std::to_string(paceMultiple));

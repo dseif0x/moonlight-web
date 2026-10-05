@@ -134,6 +134,7 @@ inline const char* encoderName(EncoderTuning::Encoder12 e)
     switch (e) {
     case EncoderTuning::Encoder12::Nvenc: return "NVENC (D3D12)";
     case EncoderTuning::Encoder12::Amf: return "AMF (D3D12)";
+    case EncoderTuning::Encoder12::Pyrowave: return "PyroWave (D3D12)";
     default: return "D3D12 Video Encode";
     }
 }
@@ -145,6 +146,7 @@ inline const char* encoderLabel(EncoderTuning::Encoder12 e)
     switch (e) {
     case EncoderTuning::Encoder12::Nvenc: return "NVENC (D3D12)";
     case EncoderTuning::Encoder12::Amf: return "AMF (D3D12)";
+    case EncoderTuning::Encoder12::Pyrowave: return "PyroWave";
     default: return "D3D12 VE";
     }
 }
@@ -174,6 +176,9 @@ inline std::string refusal(const VideoPipelineFacts& f, EncoderTuning::Encoder12
     // which the encoder's negotiation asks.
     if (encoder == E::VideoEncode && !f.videoEncode12)
         return std::string("this GPU's D3D12 Video Encode does not take ") + toString(f.codec);
+    // PyroWave (POC Ultra) codes every frame alone: no codec to negotiate
+    // with the GPU, no refresh wave to grant.
+    if (encoder == E::Pyrowave) return {};
     if (f.intraRefreshRequired && !f.d3d12IntraRefresh)
         return "the stream must refresh by intra-refresh, which the D3D12 route does not grant "
                "on this GPU";

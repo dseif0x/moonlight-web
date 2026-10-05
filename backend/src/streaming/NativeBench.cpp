@@ -164,7 +164,8 @@ const char* const kUsage =
     "  keep12=0|1                 a capture restart keeps the D3D12 Video Encode encoder\n"
     "                              when the stream it codes is the same (default 1)\n"
     "  conv12=direct|compute       the D3D12 conversion's queue\n"
-    "  enc12=ve|nvenc|amf          the D3D12 route's encoder\n"
+    "  enc12=ve|nvenc|amf|pyrowave the D3D12 route's encoder; pyrowave = POC Ultra\n"
+    "  ultrambps=<Mbit/s>          the PyroWave encoder's rate (default 170)\n"
     "  rc12=driver|qp              D3D12 Video Encode's rate control; qp = the in-house one\n"
     "  reencode=0|1                in-house rate control: a picture far over its budget is\n"
     "                              coded again, at the QP that fits it (1); 0 sends it as is\n"
@@ -410,6 +411,8 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
             tuning.enc12 = E::Nvenc;
         else if (e == "amf")
             tuning.enc12 = E::Amf;
+        else if (e == "pyrowave")
+            tuning.enc12 = E::Pyrowave;
         else
             ok = false;
     } else if (key == "rc12") {
@@ -541,6 +544,9 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
             tuning.ultraSynthKb = v.mid(10).toInt(&ok);
             ok = ok && tuning.ultraSynthKb >= 1 && tuning.ultraSynthKb <= 8192;
         }
+    } else if (key == "ultrambps") {
+        tuning.ultraMbps = value.toInt(&ok);
+        ok = ok && tuning.ultraMbps >= 1 && tuning.ultraMbps <= 2000;
     } else if (key == "ultrachannel") {
         const QString c = value.toLower();
         if (c == "video")

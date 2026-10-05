@@ -460,4 +460,37 @@ void run_video_pipeline_choice_tests()
         CHECK(!c.refused);
         CHECK(contains(c.reason, "vendor table"));
     }
+
+    SECTION("VideoPipeline — PyroWave (POC Ultra) takes the D3D12 route on any of its GPUs");
+    {
+        // An RTX with no VE for this codec and an AMD without AMF on D3D12:
+        // PyroWave asks neither, nor any refresh wave.
+        VideoPipelineFacts rtx = forcedD3d12();
+        rtx.encoder = EncoderApi::Nvenc;
+        rtx.videoEncode12 = false;
+        rtx.enc12 = EncoderTuning::Encoder12::Pyrowave;
+        rtx.intraRefreshRequired = true;
+        rtx.d3d12IntraRefresh = false;
+        VideoPipelineChoice c = chooseVideoPipeline(rtx);
+        CHECK(c.pipeline == VideoPipeline::D3d12);
+        CHECK(c.encoder12 == EncoderTuning::Encoder12::Pyrowave);
+        CHECK_EQ(c.route, std::string("DIRECT conversion → PyroWave (D3D12) HEVC"));
+        CHECK_EQ(c.encoder, std::string("PyroWave"));
+        VideoPipelineFacts amd = forcedD3d12();
+        amd.encoder = EncoderApi::Amf;
+        amd.amf12 = false;
+        amd.enc12 = EncoderTuning::Encoder12::Pyrowave;
+        CHECK(chooseVideoPipeline(amd).pipeline == VideoPipeline::D3d12);
+        // What rules the route out for every encoder still does.
+        VideoPipelineFacts wgc = rtx;
+        wgc.capture = CaptureApi::WindowsGraphicsCapture;
+        CHECK(chooseVideoPipeline(wgc).refused);
+        // The bench spec names it back.
+        EncoderTuning t;
+        t.enc12 = EncoderTuning::Encoder12::Pyrowave;
+        t.ultraMbps = 250;
+        CHECK(contains(t.describe(), "enc12=pyrowave"));
+        CHECK(contains(t.describe(), "ultrambps=250"));
+        CHECK(!t.isDefault());
+    }
 }
