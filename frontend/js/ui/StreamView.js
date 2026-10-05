@@ -122,6 +122,7 @@ import { StreamViewKeyboard } from './StreamViewKeyboard.js';
 import { StreamViewTouch } from './StreamViewTouch.js';
 import { StreamViewFullscreen } from './StreamViewFullscreen.js';
 import { flushClientLog, serverDiag } from '../util/ClientLog.js';
+import { UltraPlayer, ultraPlayerSupported } from '../stream/ultra/UltraPlayer.js';
 
 /**
  * Lane name → the i18n key the card already uses for that value. The graph
@@ -7054,6 +7055,14 @@ export class StreamView {
         // Received, against painted: the detection's share of frames shown.
         if (this._stepper) this._stepper.noteReceived(performance.now());
 
+        // POC Ultra (U4): the host codes PyroWave (enc12=pyrowave), the page
+        // decodes it on WebGPU. Every frame stands alone: no stale-frame or
+        // gap logic, no keyframe to wait for.
+        if (this._ultraMode()) {
+            this._handleUltraFrame(data, backendTs, arrivalAbs);
+            return;
+        }
+
         // ── Stale frame detection (safety net) ───────────────────────────────
         // The video DataChannel is now ordered=true (SCTP reorders internally),
         // so frames normally arrive in send order. This filter remains as a
@@ -11871,7 +11880,93 @@ export class StreamView {
         }
     }
 
+    /**
+     * POC Ultra (U4): whether this page decodes the host's frames as PyroWave
+     * (bench key: localStorage mw_ultra=pyrowave, with the host's
+     * pipeline=d3d12,enc12=pyrowave). Read once per session.
+     */
+    _ultraMode() {
+        if (this._ultraOn === undefined) {
+            let on = false;
+            try {
+                on = globalThis.localStorage?.getItem('mw_ultra') === 'pyrowave';
+            } catch {
+                on = false;
+            }
+            // The player draws through onDecodedFrame on this thread: a
+            // decode worker that owns the canvas has no room for it.
+            this._ultraOn = on && ultraPlayerSupported() && !this._useWorker;
+            if (on && !this._ultraOn)
+                console.warn(
+                    '[MW-ULTRA] mw_ultra=pyrowave asked, but ' +
+                        (this._useWorker
+                            ? 'the decode worker is on'
+                            : 'this browser has no WebGPU'),
+                );
+        }
+        return this._ultraOn;
+    }
+
+    /**
+     * One PyroWave frame (its packets back to back, the start-of-frame
+     * header first). The player is made from the first header's size; the
+     * frame it gives back takes the ordinary road from onDecodedFrame on.
+     */
+    _handleUltraFrame(data, backendTs, arrivalAbs) {
+        this.stats.received++;
+        if (!this._ultraPlayer) {
+            if (this._ultraStarting || data.length < 8) return;
+            const dv = new DataView(data.buffer, data.byteOffset, 8);
+            const w0 = dv.getUint32(0, true);
+            if (!(w0 >>> 31)) return; // not a start of frame: wait for one
+            const width = (w0 & 0x3fff) + 1;
+            const height = ((w0 >>> 14) & 0x3fff) + 1;
+            this._ultraStarting = true;
+            const player = new UltraPlayer(
+                width,
+                height,
+                (frame, meta) => {
+                    this._ultraFrames = (this._ultraFrames || 0) + 1;
+                    if (!this._firstDecoderOutputLogged) {
+                        this._firstDecoderOutputLogged = true;
+                        console.log(
+                            '[MW-ULTRA] first PyroWave frame drawn, ' + width + 'x' + height,
+                        );
+                    }
+                    this.onDecodedFrame(frame);
+                },
+                { log: (m) => console.log(m) },
+            );
+            player.init().then(
+                (ok) => {
+                    this._ultraStarting = false;
+                    if (ok) this._ultraPlayer = player;
+                    else console.warn('[MW-ULTRA] no WebGPU adapter: nothing will be drawn');
+                },
+                (e) => {
+                    this._ultraStarting = false;
+                    console.warn('[MW-ULTRA] the decoder did not start: ' + e.message);
+                },
+            );
+            return;
+        }
+        // A chunk timestamp of its own, increasing: onDecodedFrame pairs the
+        // decoded frame with this submit by it.
+        const ts = (this._ultraTs = (this._ultraTs || 0) + 1);
+        this._trackChunkSubmit(ts, backendTs, {
+            arrived: arrivalAbs,
+            bytes: data.length,
+            key: true,
+            hostTs: backendTs,
+        });
+        this._ultraPlayer.push(data, ts, backendTs);
+    }
+
     destroy() {
+        if (this._ultraPlayer) {
+            this._ultraPlayer.destroy();
+            this._ultraPlayer = null;
+        }
         if (this._remotePointer) this._remotePointer.releaseAll();
         this._exitCssFallbackFullscreen();
         this._releaseWakeLock();
