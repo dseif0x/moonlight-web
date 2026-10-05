@@ -167,7 +167,7 @@ const char* const kUsage =
     "  enc12=ve|nvenc|amf|pyrowave the D3D12 route's encoder; pyrowave = POC Ultra\n"
     "  ultrambps=<Mbit/s>          the PyroWave encoder's rate (default 170)\n"
     "  aroadpace=<x>               the audio road's chunks paced at x times what it carried,\n"
-    "                              50 Mbit/s at least; 0 = a frame in one run (default 3)\n"
+    "                              50 Mbit/s at least; 0 = a frame in one run (default 0)\n"
     "  rc12=driver|qp              D3D12 Video Encode's rate control; qp = the in-house one\n"
     "  reencode=0|1                in-house rate control: a picture far over its budget is\n"
     "                              coded again, at the QP that fits it (1); 0 sends it as is\n"

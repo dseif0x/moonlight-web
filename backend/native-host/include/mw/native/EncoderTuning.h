@@ -422,7 +422,7 @@ struct EncoderTuning
     /// The audio road's pacing (POC Ultra U1.4 ter; plan « Wi-Fi », W4):
     /// its chunks leave at this multiple of the rate it carried over the last
     /// second, never under 50 Mbit/s; 0 sends each frame in one run. -1, the
-    /// default: 3.
+    /// default: off (a Mac in Wi-Fi dropped more with it, W4).
     double aroadPace = -1;
     /// Each video frame's way through the relay, written as a CSV next to the
     /// log when the session ends (plan « Wi-Fi : la vidéo qui attend dans

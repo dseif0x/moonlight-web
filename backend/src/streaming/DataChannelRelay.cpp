@@ -3072,11 +3072,12 @@ void DataChannelRelay::createRtpVideoTracks()
         m_UltraTrack->setMediaHandler(packetizer);
         m_UltraTrack->onOpen([]() { qInfo() << "[DataChannelRelay] Ultra RTP track open"; });
     }
-    // The audio road has no congestion control of its own: its chunks leave
-    // paced (AroadPacer.h), 3 times what it carries by default, 50 Mbit/s at
-    // least, 16 KiB at most back to back.
-    if ((m_RtpVideoAudioRoad || m_UltraAudioRoad) && !m_AroadPacer) {
-        const double multiple = m_AroadPace < 0 ? 3.0 : m_AroadPace;
+    // The audio road's pacing (AroadPacer.h), off unless the bench asks
+    // (aroadpace=<x>): on a Mac in Wi-Fi, 3 times its rate over a 50 Mbit/s
+    // floor dropped more in the kernel than a frame in one run (06/10/2026,
+    // W4 « after »), as pacing SCTP did in W2 A: Chrome reads late, the host's
+    // bursts are not the cause. Its resends feed the rate governor either way.
+        const double multiple = m_AroadPace < 0 ? 0.0 : m_AroadPace;
         if (multiple > 0) {
             m_AroadPacer = std::make_unique<AroadPacer>(multiple, 50'000'000 / 8, 16 * 1024);
             qInfo() << "[DataChannelRelay] audio road paced at" << multiple

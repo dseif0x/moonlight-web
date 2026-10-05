@@ -49,6 +49,15 @@ class Track;
 // retransmissions (DataChannelRelay, linkstats) and cuts the bitrate on them.
 // W2 A is a warning: on SCTP, pacing alone did not lower the Mac's drops.
 //
+// ── What it gave (06/10/2026, W4 « after », a Mac in Wi-Fi, HEVC) ─────────
+//
+// Worse, as W2 A had warned: at 3x over the 50 Mbit/s floor, 693 to 5,011
+// kernel drops a pass and 31-43 clicks out of 60; a frame in one run with the
+// resends feeding the governor, 802-4,266 and 44-53 (before: 2,067-3,833 and
+// 17-37). Chrome's socket fills when Chrome reads late. So it is off by
+// default, a bench key (aroadpace=); only a rate well under what Chrome reads
+// could help, and the governor's cut on the resends is what does.
+//
 // ── The rate ────────────────────────────────────────────────────────────────
 //
 // `multiple` times what the road carried over the last second, never under
