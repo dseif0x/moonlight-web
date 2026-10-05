@@ -1058,6 +1058,53 @@ les bancs sur DualRTX ne sont pas touchés. Il faut que la route audio porte une
 marque vidéo (AF4x) et que seul le vrai son garde EF. Le plan DSCP choisira les
 marques.
 
+### 6.12 U2.4 : le PyroWave de référence, l'oracle des portages (05/10/2026, soir)
+
+Priorité donnée par Bruno, le 05/10 au soir : « compléter l'implémentation de
+PyroWave, je veux savoir les résultats ». L'ordre retenu avec le coordinateur :
+l'oracle, puis le décodeur WebGPU (U3.4), puis l'encodeur HLSL (U2.5), puis
+l'intégration U4.
+
+**L'outil** (`e6d2a275`). `mw-pyrowave-ref` compile le PyroWave de l'amont
+(Hans-Kristian Arntzen, MIT, commit `509e4f88`), en Vulkan, depuis l'arbre
+vendorisé par punktfunk. Cet arbre ajoute des correctifs qui ne changent pas le
+flux. L'outil encode et décode des Y4M 4:2:0, et mesure le PSNR. Il n'entre ni
+dans le build du produit, ni dans l'installeur.
+- `scripts/bench/ultra/make_corpus.py` : un lot d'images de test en 1080p,
+  60 images par clip, rangé hors du dépôt. Il comprend du texte qui défile,
+  des dégradés, un damier fin avec des lignes de 1 px, du bruit, et 60 images
+  du clip de jeu du banc (`cod.webm`). Rien n'est capturé à l'écran.
+- `scripts/bench/ultra/oracle.py` : passe tout le lot par GPU et par débit, et
+  garde les flux et les images décodées pour les portages.
+
+**Ce que l'oracle dit déjà** (temps GPU de la bibliothèque, par image,
+1080p, en ms) :
+
+| Clip | Débit | PSNR-Y (RTX / iGPU AMD) | Encodage RTX / AMD | Décodage RTX / AMD |
+|---|---|---|---|---|
+| Jeu | 170 Mbit/s | 51,9 / 50,3 dB | 0,14 / 1,9 | 0,10 / 1,7 |
+| Texte | 170 Mbit/s | 33,4 / 33,3 dB | 0,15 / 2,2 | 0,10 / 1,2 |
+| Texte | 250 Mbit/s | 44,5 / 43,9 dB | 0,16 / 2,2 | 0,10 / 1,4 |
+| Dégradés | ≤ 97 Mbit/s (n'a pas besoin de plus) | 67,0 / 54,3 dB | 0,10 / 1,3 | 0,10 / 1,3 |
+| Damier, bruit | 170 Mbit/s | 16-17 dB (incompressibles) | 0,21-0,23 / 2,9-3,6 | 0,10 / 1,4 |
+
+- **Sur la RTX, le codec est pratiquement gratuit** : 0,1-0,24 ms d'encodage,
+  0,1 ms de décodage, contre 1,4-2 ms pour NVENC (§6.6).
+- **Sur l'iGPU AMD, il coûte 1,3-3,7 ms à l'encodage**, contre 4-4,3 ms pour
+  AMF. Le gain sur cet hôte est donc de 1 à 3 ms, au bas de la marge du rapport
+  U0.5. Les temps viennent d'images isolées sur un GPU au repos : ils seront
+  repris en continu.
+- **Le texte est le cas dur.** 33 dB à 170 Mbit/s, 44,5 dB à 250 : un texte
+  fin demande plus que le seuil subjectif publié. Le jugement à l'œil de Bruno
+  (U2) devra porter sur du texte.
+- **L'encodeur Vulkan de l'amont est faux sur l'Arc A380** : la moitié droite
+  de l'image sort grise (PSNR-Y 10 dB). Le décodeur de l'Arc lit bien le flux
+  de la RTX, c'est donc l'encodeur qui est en cause, sans doute ses tailles de
+  sous-groupe. L'oracle tourne donc sur la RTX. Le portage HLSL (U2.5) devra
+  être vérifié à part sur l'Arc.
+- **Un piège de la machine** : une couche Vulkan implicite (de capture)
+  plante la création du périphérique. L'outil coupe les couches implicites.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
