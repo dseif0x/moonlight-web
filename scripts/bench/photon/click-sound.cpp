@@ -354,7 +354,19 @@ int main(int argc, char** argv)
     int soundMiss = 0, flagMiss = 0;
     std::string rows;
     if (tickSecs > 0) {
-        Sleep(static_cast<DWORD>(tickSecs * 1000));
+        // Each onset as it comes, flushed: a run stopped early keeps them.
+        const int64_t end = qpcUs() + static_cast<int64_t>(tickSecs * 1e6);
+        size_t printedSound = 0, printedFlag = 0;
+        while (qpcUs() < end) {
+            Sleep(500);
+            const auto ss = g_Sound.all();
+            const auto ff = g_Flag.all();
+            for (; printedSound < ss.size(); ++printedSound)
+                std::printf("beep %lld\n", static_cast<long long>(ss[printedSound]));
+            for (; printedFlag < ff.size(); ++printedFlag)
+                std::printf("flag %lld\n", static_cast<long long>(ff[printedFlag]));
+            std::fflush(stdout);
+        }
         const auto s = g_Sound.all();
         const auto fl = g_Flag.all();
         for (int64_t t : s) {
