@@ -566,6 +566,8 @@ def main():
     ap.add_argument("--tuning", default="", help="host keys for every pass (local_matrix --tuning)")
     ap.add_argument("--codec", default="", help="h264 | hevc | av1 for every pass (pass.py --codec); "
                     "the video's road comes from MW_RTP_VIDEO in this script's environment")
+    ap.add_argument("--local-storage", action="append", default=[], metavar="KEY=VALUE",
+                    help="set in the client page before every pass (pass.py --local-storage)")
     ap.add_argument("--host", default="",
                     help="a native host on another machine (um790pro, mw-mac): its DEV "
                          "edition's native_tuning set to --tuning, pass.py --host against it")
@@ -593,6 +595,9 @@ def main():
     if a.codec:
         for c in contents:
             CONTENTS[c] = CONTENTS[c] + ["--codec", a.codec]
+    for kv in a.local_storage:
+        for c in contents:
+            CONTENTS[c] = CONTENTS[c] + ["--local-storage", kv]
     return phase(client, a.prefix, hosts, contents, a.rounds, a.cadences, a.udp, a.burst)
 
 
