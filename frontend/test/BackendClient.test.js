@@ -279,7 +279,8 @@ const POST_ROUTES = [
         '/api/hosts/h1/seats',
         { user: 'ada' },
     ],
-    ['stopHostSession', () => BackendClient.stopHostSession('h1'), '/api/hosts/h1/stop-session', {}],
+    // The device rides along: on a MultiSeat host, Quit is this device's seat's.
+    ['stopHostSession', () => BackendClient.stopHostSession('h1'), '/api/hosts/h1/stop-session', { client_uniqueid: expect.stringMatching(/^[0-9A-F]{16}$/) }],
     [
         'shareActivate',
         () => BackendClient.shareActivate(2, { host_uuid: 'u1', app_id: 7 }),
@@ -553,7 +554,8 @@ describe('BackendClient request shaping', () => {
         const fetchMock = mockFetch(jsonResponse({ currentGameId: 7 }));
         const answer = await BackendClient.getRunningApp('h1');
         expect(answer).toEqual({ currentGameId: 7 });
-        expect(fetchMock.apiCalls()[0][0]).toBe('/api/hosts/h1/running-app');
+        // For this device: on MultiSeat, the app on its own seat.
+        expect(fetchMock.apiCalls()[0][0]).toBe(`/api/hosts/h1/running-app?client_uniqueid=${BackendClient.clientUniqueId()}`);
     });
 
     it('quitApp defaults to this browser when no slot is named', async () => {

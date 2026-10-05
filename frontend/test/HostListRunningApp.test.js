@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('../js/api/BackendClient.js', () => ({
-    BackendClient: { getAppList: vi.fn(), stopHostSession: vi.fn() },
+    BackendClient: { getAppList: vi.fn(), stopHostSession: vi.fn(), getRunningApp: vi.fn() },
 }));
 
 import { HostListView } from '../js/ui/HostListView.js';
@@ -115,5 +115,24 @@ describe('the running app card', () => {
         expect(BackendClient.stopHostSession).not.toHaveBeenCalled();
         expect(view.onLaunchApp).not.toHaveBeenCalled();
         expect(cardOf(2).classList.contains('app-card--running')).toBe(true);
+    });
+
+    // MultiSeat: each device has its own seat, so the host's currentGameId —
+    // the machine's own GameStream server — is nobody's here. The card shows
+    // what THIS device's seat runs, as the host list asked it.
+    it("on a per-device host, ignores the machine's app and shows this device's seat's", async () => {
+        BackendClient.getRunningApp.mockResolvedValue({ currentGameId: 2 });
+        mount({ resumableApps: true, runningAppPerDevice: true, currentGameId: 1 });
+        expect(view.hosts[0].currentGameId).toBe(0);
+        expect(container.querySelector('.app-card--running')).toBeNull();
+
+        view._active = true;
+        view._refreshDeviceRunning();
+
+        expect(BackendClient.getRunningApp).toHaveBeenCalledWith('host-a');
+        await vi.waitFor(() =>
+            expect(cardOf(2).classList.contains('app-card--running')).toBe(true),
+        );
+        expect(cardOf(1).classList.contains('app-card--running')).toBe(false);
     });
 });

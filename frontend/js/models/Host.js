@@ -38,11 +38,16 @@ export class Host {
         this.gpuModel = data.gpuModel || '';
         this.gfeVersion = data.gfeVersion || '';
         this.appVersion = data.appVersion || '';
-        this.currentGameId = data.currentGameId || 0;
         // The app outlives the stream here (Sunshine and its forks): Stop only
         // disconnects, and the running app's card offers to resume or quit it,
         // as in Moonlight. Declared by the server from the host's backend.
         this.resumableApps = data.resumableApps === true;
+        // Each device runs its own app here (MultiSeat: a seat per device), so
+        // the host's currentGameId — the machine's own — says nothing about
+        // this one: it starts at 0, and the host list puts in what this
+        // device's seat runs (HostListView._refreshDeviceRunning).
+        this.runningAppPerDevice = data.runningAppPerDevice === true;
+        this.currentGameId = this.runningAppPerDevice ? 0 : data.currentGameId || 0;
         this.displayModes = data.displayModes || [];
         this.serverCodecModeSupport = data.serverCodecModeSupport || 1;
         // The backend never sends host addresses or the MAC: the browser talks

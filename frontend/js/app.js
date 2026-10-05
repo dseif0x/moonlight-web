@@ -2406,6 +2406,9 @@ const MoonlightApp = {
             }
             cleanup();
             host.currentGameId = 0;
+            // Its seat's answer too, where each device has one (MultiSeat).
+            if (this.hostListView && this.hostListView.forgetDeviceRunning)
+                this.hostListView.forgetDeviceRunning(host.uuid);
             if (this.hostListView) this.hostListView.clearLaunching();
             this.launchApp(host, app, undefined, undefined, {
                 skipSelfStreamWarn: true,

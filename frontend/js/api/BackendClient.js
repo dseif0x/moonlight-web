@@ -427,7 +427,9 @@ export class BackendClient {
         const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
         const timer = controller ? setTimeout(() => controller.abort(), 6000) : null;
         try {
-            const resp = await fetch(`/api/hosts/${hostId}/running-app`, {
+            // This device's own, where each device has a seat (MultiSeat).
+            const device = encodeURIComponent(this.clientUniqueId());
+            const resp = await fetch(`/api/hosts/${hostId}/running-app?client_uniqueid=${device}`, {
                 signal: controller ? controller.signal : undefined,
             });
             if (!resp.ok) return this._handleError(resp, 'running-app');
@@ -438,7 +440,14 @@ export class BackendClient {
     }
 
     static async stopHostSession(hostId) {
-        return this.post(`/api/hosts/${hostId}/stop-session`, {}, { timeoutMs: 15000 });
+        // The device: where each device has its own seat (MultiSeat), Quit is
+        // this device's seat's. Ignored by every other host. 40 s: the host
+        // answers once the app is gone, after its own exit timeout.
+        return this.post(
+            `/api/hosts/${hostId}/stop-session`,
+            { client_uniqueid: this.clientUniqueId() },
+            { timeoutMs: 40000 },
+        );
     }
 
     // ── Session sharing ────────────────────────────────────────────────────

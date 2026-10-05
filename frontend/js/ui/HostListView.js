@@ -135,11 +135,18 @@ export class HostListView {
     // floors the extra checks fired
     // by visibilitychange (a phone can wake this page many times a minute).
     static UPDATE_CHECK_MS = 30 * 60 * 1000;
+    // How often the host list asks a per-device host (MultiSeat) what this
+    // device's seat runs: each answer costs a request to the seat's Apollo.
+    static DEVICE_RUNNING_MS = 15 * 1000;
     static UPDATE_CHECK_MIN_MS = 5 * 60 * 1000;
 
     constructor(container) {
         this.container = container;
         this.hosts = [];
+        // What THIS device's seat runs, per host where each device has its own
+        // (host.runningAppPerDevice): uuid -> app id, and when it was asked.
+        this._deviceRunning = new Map();
+        this._deviceRunningAt = new Map();
         this.pollTimer = null;
         this.eventsBound = false;
         this.onLaunchApp = null; // called with (host, app) when an app card is clicked
@@ -430,7 +437,10 @@ export class HostListView {
                     quitAppBtn.textContent = t('apps.quitting');
                     BackendClient.stopHostSession(uuid)
                         .then((res) => {
-                            if (host) host.currentGameId = Number(res && res.currentGameId) || 0;
+                            const id = Number(res && res.currentGameId) || 0;
+                            if (host) host.currentGameId = id;
+                            if (host && host.runningAppPerDevice)
+                                this.forgetDeviceRunning(uuid, id);
                         })
                         .catch((err) => {
                             console.error('[MW] Quit app failed:', err);
@@ -495,6 +505,8 @@ export class HostListView {
 
     start() {
         this._active = true;
+        // Back on the list, maybe from a stream just stopped: ask again at once.
+        this._deviceRunningAt.clear();
         this._autoScan();
         this.scheduleNextPoll(0); // immediate first refresh
         this._checkForUpdate(); // discreet "new version available" banner
@@ -894,10 +906,14 @@ export class HostListView {
             // Merge — add/update, never remove
             for (const h of serverHosts) {
                 const host = new Host(h);
+                // This device's running app, as last asked (see Host).
+                if (host.runningAppPerDevice)
+                    host.currentGameId = this._deviceRunning.get(host.uuid) || 0;
                 const idx = this.hosts.findIndex((ex) => ex.uuid === host.uuid);
                 if (idx >= 0) this.hosts[idx] = host;
                 else this.hosts.push(host);
             }
+            this._refreshDeviceRunning();
             const firstLoad = !this._hostsLoaded;
             this._hostsLoaded = true;
             const after = this._fingerprint();
@@ -916,6 +932,43 @@ export class HostListView {
             // Show error only on first load; keep existing data on refresh
             if (this.hosts.length === 0) this.renderError(err.message);
         }
+    }
+
+    /**
+     * What this device's own seat runs, on every host where each device has
+     * one: the host list carries the machine's currentGameId, which is no one
+     * device's. Asked at most every DEVICE_RUNNING_MS per host, and at once
+     * after start() or forgetDeviceRunning().
+     */
+    _refreshDeviceRunning() {
+        const now = Date.now();
+        for (const host of this.hosts) {
+            if (!host.runningAppPerDevice || host.state !== 'online') continue;
+            const at = this._deviceRunningAt.get(host.uuid);
+            if (at !== undefined && now - at < HostListView.DEVICE_RUNNING_MS) continue;
+            this._deviceRunningAt.set(host.uuid, now);
+            BackendClient.getRunningApp(host.uuid)
+                .then((answer) => {
+                    if (!this._active || this._destroyed) return;
+                    const id = Number(answer && answer.currentGameId) || 0;
+                    if ((this._deviceRunning.get(host.uuid) || 0) === id) return;
+                    this._deviceRunning.set(host.uuid, id);
+                    const current = this.hosts.find((h) => h.uuid === host.uuid);
+                    if (current) current.currentGameId = id;
+                    this.renderList();
+                })
+                .catch(() => {
+                    /* unknown: keep the last answer, ask again next time */
+                });
+        }
+    }
+
+    /** Ask this host's seat again on the next refresh, and show nothing meanwhile. */
+    forgetDeviceRunning(uuid, id = 0) {
+        this._deviceRunning.set(uuid, id);
+        this._deviceRunningAt.delete(uuid);
+        const host = this.hosts.find((h) => h.uuid === uuid);
+        if (host && host.runningAppPerDevice) host.currentGameId = id;
     }
 
     // Stable fingerprint of host list — skips re-render when nothing changed
