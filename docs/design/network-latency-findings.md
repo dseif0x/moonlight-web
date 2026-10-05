@@ -1002,6 +1002,22 @@ client in Wi-Fi.
     deltas: its header must carry the host's frame number, as planned by the
     POC session.
   - SCTP's advantage is only that nothing is ever lost. Its cost is the tail.
+- **The same evening, the audio road healed by the host's frame number**
+  (`1489e114` page, `14f57e0e` host, build `build\` of 22:06). The aroad
+  header grew from 8 to 12 bytes and now carries the host's wire `frameId`.
+  A frame the page gives up on becomes a `frameId` gap, which StreamView names
+  to the host (`invalidateref`) and decodes on, with no keyframe. Two HEVC
+  passes, 22:07-22:18, give-up still 15 ms:
+  - click 89.5 ms (p90 127-129), 59 of 60 clicks both times;
+  - 58 frames a second;
+  - frame age median 21-22 ms, mean 26-31, p90 34-58;
+  - 8 invalidations and 5 keyframe requests a pass.
+
+  The SCTP witness of the same hour (HEVC): click 100.9 ms (p90 158), 49 of 60
+  clicks, frame age median 36 ms, mean 84, p90 232, 0.9 % retransmitted.
+  **With the frame number, the audio road beats SCTP in HEVC on Wi-Fi by ~11
+  ms at the click and has none of its tail.** Not tried: a longer give-up
+  (`mw_aroad_giveup=40`).
 - **Open:** a real load (heavier content or another station), and the Mac,
   where SCTP's tail was the worst (W0-W2).
 
