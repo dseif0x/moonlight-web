@@ -3077,6 +3077,7 @@ void DataChannelRelay::createRtpVideoTracks()
     // floor dropped more in the kernel than a frame in one run (06/10/2026,
     // W4 « after »), as pacing SCTP did in W2 A: Chrome reads late, the host's
     // bursts are not the cause. Its resends feed the rate governor either way.
+    if ((m_RtpVideoAudioRoad || m_UltraAudioRoad) && !m_AroadPacer) {
         const double multiple = m_AroadPace < 0 ? 0.0 : m_AroadPace;
         if (multiple > 0) {
             m_AroadPacer = std::make_unique<AroadPacer>(multiple, 50'000'000 / 8, 16 * 1024);
