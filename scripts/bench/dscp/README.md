@@ -11,6 +11,7 @@ product code marks anything. Findings go to
 |---|---|---|
 | `win_dscp_probe.py` | Windows sender | tries each way a process can mark (plain, `IP_TOS`, `WSASendMsg` with an `IP_TOS` control message per packet, qWAVE traffic type, qWAVE exact value), each with its own payload size |
 | `tosparse.py` | Linux receiver | DSCP per payload size in a `tcpdump -n -v -l` text capture |
+| `pcapng_tos.py` | any | the same from a pcapng (`pktmon etl2pcap` on a Windows receiver, Wi-Fi frames included) |
 | `udptos.py` | Linux sender | marked UDP, one class at a time (DF, CS1, AF11, AF41, CS5, VA, EF, CS6, CS7), each with its own size and time window; prints the windows |
 | `mon-on.sh`, `mon-off.sh`, `mon-cap.sh` | Linux, Intel AX210 | monitor mode on channel 44 / 80 MHz (the Freebox's 5 GHz), back to managed, a capture of N seconds |
 | `tidstat.py` | Linux | per receiver and transmitter, the 802.11 QoS data frames by TID (bad-FCS frames left out) |
@@ -77,3 +78,16 @@ UM790Pro through two Freebox repeaters and their Wi-Fi 7 link):
   plain socket option works for a user process, below CS6.
 - The DSCP crossed DualRTX → repeater → Wi-Fi 7 link → repeater → UM790Pro
   unchanged.
+
+**Per packet and dual stack** (05/10/2026, later; the same probe, received by
+the N95 in Wi-Fi with `pktmon start --capture --comp nics`, then
+`pktmon etl2pcap` and `pcapng_tos.py`):
+- one socket whose `IP_TOS` changes before every packet (EF, AF41, AF11, 0 in
+  turn, as libjuice does): every packet carries its own value;
+- an IPv6 dual-stack socket (libjuice's) sending to an IPv4 peer through its
+  v4-mapped address: `IPV6_TCLASS` alone is ignored (0), `IP_TOS` alone marks
+  (46), both mark (46);
+- the marks arrive intact at a Wi-Fi client of the Freebox.
+
+So a Windows build of libjuice that sets `IP_TOS` (and `IPV6_TCLASS`, harmless)
+on its socket marks every stream packet as Linux and macOS already do.
