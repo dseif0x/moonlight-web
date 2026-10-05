@@ -1018,8 +1018,65 @@ client in Wi-Fi.
   **With the frame number, the audio road beats SCTP in HEVC on Wi-Fi by ~11
   ms at the click and has none of its tail.** Not tried: a longer give-up
   (`mw_aroad_giveup=40`).
-- **Open:** a real load (heavier content or another station), and the Mac,
-  where SCTP's tail was the worst (W0-W2).
+- **Open:** a real load (heavier content or another station).
+
+### 05-06/10/2026 — W4 on the Mac: the three roads, before and after the POC's two fixes
+
+Same host and method as the N95 entry above. Client: Léo's MacBook in Wi-Fi,
+Chrome, the page at 240, HEVC, Auto bitrate (16-48 Mbit/s: a real load this
+time). Kernel drops for a full socket buffer counted per pass (`netstat`).
+The house link was busy that evening.
+- **"Before"** (22:36-23:42, 3 passes per road):
+  - build `build\` of 22:20 for the first five passes;
+  - the last four on `73620029`, with the fixes turned off by their keys:
+    `mw_rtp_stallwatch=0`, `aroadpace=0,retrcut=0`.
+- **"After"** (23:42-00:24): `73620029`, built at 23:20. It adds two fixes:
+  - the RTP track's stall watchdog: no frame for 250 ms → a forced IDR request;
+  - the audio road paced at 3× what it carries, 50 Mbit/s at least, and its
+    resends counted in `retransPermille`, so `retrcut` cuts the encoder.
+
+  `aroad0` is the audio road with `aroadpace=0` (the resend cut kept).
+
+| Road | Clicks of 60 | Click median | Frame age median | Kernel drops / pass |
+|---|---|---|---|---|
+| SCTP before | 58-59 | 74.5-81.5 ms (p90 85-175) | 13-14 ms | 254-354 |
+| SCTP after | 59 | 71.4-75.2 ms (p90 86-92) | 13-15 ms | 309-431 |
+| RTP track before | 0 / 54 / 54 | 91-93 ms | 24 ms | 0 |
+| RTP track after | 59 / 56 / 48 | 91-99 ms | 24-25 ms | 0 |
+| aroad before | 23 / 17 / 37 | 68-76 ms | 13-15 ms | 2,067-3,833 |
+| aroad after, paced | 43 / 36 / 31 | 68-75 ms | 13-14 ms | 693-5,011 |
+| aroad0 after | 48 / 53 / 44 | 64.5-67.6 ms | 13-15 ms | 802-4,266 |
+
+- **The RTP track's stall watchdog works.** No pass stalled at 0 fps after it;
+  before it, one in three did, when a loss hit at the wrong moment and the host
+  ignored Chrome's PLI. The track costs ~10 ms of frame age, the receive
+  metronome, and ~20 ms at the click against SCTP. It drops nothing in the
+  kernel.
+- **The audio road is the fastest when it gets through, and it floods the
+  Mac's socket.** Its median click is 65-75 ms against SCTP's ~73. But Chrome's
+  UDP socket on the Mac overflows by thousands of datagrams a pass, and 7-43
+  clicks of 60 are lost.
+  - The resend cut helps a little: more clicks, the encoder at ~21-25 Mbit/s.
+  - The pacing does not help, and probably hurts: 693-5,011 drops against
+    802-4,266 for `aroad0`.
+  - This is W1 bis and W2 A again: the socket overflows when Chrome reads late,
+    not under the host's bursts. A pacer at 3× and at least 50 Mbit/s stays
+    far above what Chrome drains then.
+- **SCTP is the only road on the Mac that loses no click.** Its congestion
+  control is what keeps the socket's overflow to ~300 datagrams a pass. Its
+  tail at the click was smaller after midnight (p90 86-92) than before
+  (85-175); the house link was likely quieter.
+- **What it means:**
+  - On a Mac in Wi-Fi, no road beats SCTP yet.
+  - The audio road would need real congestion control: a rate that follows
+    the resends and the drops, not a fixed multiple of what it carries.
+  - The RTP track will always carry Chrome's metronome.
+  - On the N95, which drops nothing in the kernel, the audio road with the
+    frame number already beats SCTP in HEVC (entry above). The client's socket
+    makes the difference.
+- **Open:** why the audio road loses clicks; whether the flag's frames are the
+  ones lost to the socket. And a congestion-controlled audio road, measured on
+  the Mac.
 
 ### 05/10/2026 — DSCP on the wire and on the air, and the host's share of a sound (audio + DSCP plan, D0 and A1)
 
