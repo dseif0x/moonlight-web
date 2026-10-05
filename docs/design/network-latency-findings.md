@@ -927,6 +927,25 @@ U1.4 ter was noise.
 | SCTP | 32.9 ms | 31.7 ms |
 | Video track | 39.9 ms | 38.8 ms |
 
+### 05/10/2026 — the audio road would ride in the Wi-Fi voice queue off Windows (session ex-3b)
+
+Found by the audio + DSCP planning session. No bench.
+
+- **libdatachannel marks by track type.** `Track::transportSend`
+  (`third_party/libdatachannel/src/impl/track.cpp:215-220`) sets DSCP 46 (EF)
+  on every packet of an "audio" track and 36 (AF42) on every other track,
+  following RFC 8837.
+- **The audio road is an audio track.** On a host where the mark reaches the
+  wire (Linux, macOS), all the video on `aroad` would leave as EF. An access
+  point that follows RFC 8325 maps EF to the WMM voice queue. That queue does
+  not aggregate frames, so 20-150 Mbit/s of video there would crush its rate
+  and starve the real voice traffic of the house.
+- **Windows hosts are not affected.** libjuice sets no DSCP there, so the
+  U1.4 ter and quater benches on DualRTX are not touched.
+- **To fix before `aroad` reaches the product off Windows.** The video and
+  Ultra packets of the audio road should carry a video mark (AF4x), and only
+  the real audio track EF. The DSCP plan decides the marks.
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
