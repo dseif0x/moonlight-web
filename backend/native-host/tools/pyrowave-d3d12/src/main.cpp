@@ -137,7 +137,7 @@ void dumpMessages(ID3D12Device* device)
 }
 
 int encode(const char* in, const char* out, double mbps, size_t packet, uint32_t vendor, int repeat,
-           bool debug, const char* dumpCoef, bool selfTest)
+           bool debug, const char* dumpCoef, bool selfTest, bool nv12)
 {
     // --debug: the debug layer with GPU-based validation; its messages are
     // printed when a frame fails and at the end.
@@ -228,7 +228,32 @@ int encode(const char* in, const char* out, double mbps, size_t packet, uint32_t
         std::printf("{\"selftest\":\"%s\",\"ok\":%s}\n", hex.c_str(), ok ? "true" : "false");
         return ok ? 0 : 6;
     }
-    const size_t sourceBytes = enc.sourceBytes();
+    // --nv12: the source laid out as UltraEncoder12 gets it from the engine,
+    // an NV12 texture's two planes at their copyable footprints (chroma
+    // interleaved), instead of a planar Y4M frame.
+    using PW = mw::native::encode::PyroWaveEncoder12;
+    PW::SourceLayout layout = PW::planar(y.width, y.height);
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT planes[2] = {};
+    if (nv12) {
+        D3D12_RESOURCE_DESC td = {};
+        td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        td.Width = UINT64(y.width);
+        td.Height = UINT(y.height);
+        td.DepthOrArraySize = 1;
+        td.MipLevels = 1;
+        td.Format = DXGI_FORMAT_NV12;
+        td.SampleDesc.Count = 1;
+        UINT64 total = 0;
+        device->GetCopyableFootprints(&td, 0, 2, 0, planes, nullptr, nullptr, &total);
+        layout.yOffset = uint32_t(planes[0].Offset);
+        layout.yPitch = planes[0].Footprint.RowPitch;
+        layout.cbOffset = uint32_t(planes[1].Offset);
+        layout.crOffset = uint32_t(planes[1].Offset) + 1;
+        layout.cPitch = planes[1].Footprint.RowPitch;
+        layout.interleaved = true;
+        layout.bytes = uint32_t(total);
+    }
+    const size_t sourceBytes = layout.bytes;
     auto upload = makeBuffer(device.Get(), (sourceBytes + 255) & ~size_t(255),
                              D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
     auto source = makeBuffer(device.Get(), (sourceBytes + 255) & ~size_t(255),
@@ -269,9 +294,7 @@ int encode(const char* in, const char* out, double mbps, size_t packet, uint32_t
                                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             cmd->ResourceBarrier(1, &toRead);
         }
-        enc.record(cmd.Get(), source.Get(),
-                   mw::native::encode::PyroWaveEncoder12::planar(y.width, y.height), target,
-                   timestamps.Get(), 0, tsReadback.Get());
+        enc.record(cmd.Get(), source.Get(), layout, target, timestamps.Get(), 0, tsReadback.Get());
         cmd->Close();
         ID3D12CommandList* lists[] = {cmd.Get()};
         queue->ExecuteCommandLists(1, lists);
@@ -280,7 +303,23 @@ int encode(const char* in, const char* out, double mbps, size_t packet, uint32_t
         WaitForSingleObject(done, INFINITE);
     };
     while (readFrame(y, frame)) {
-        std::memcpy(uploadPtr, frame.data(), sourceBytes);
+        if (nv12) {
+            const size_t w = size_t(y.width), h = size_t(y.height);
+            const uint8_t* cb = frame.data() + w * h;
+            const uint8_t* cr = cb + (w / 2) * (h / 2);
+            for (size_t r = 0; r < h; r++)
+                std::memcpy(uploadPtr + layout.yOffset + r * layout.yPitch, frame.data() + r * w,
+                            w);
+            for (size_t r = 0; r < h / 2; r++) {
+                uint8_t* row = uploadPtr + layout.cbOffset + r * layout.cPitch;
+                for (size_t x = 0; x < w / 2; x++) {
+                    row[2 * x] = cb[r * (w / 2) + x];
+                    row[2 * x + 1] = cr[r * (w / 2) + x];
+                }
+            }
+        } else {
+            std::memcpy(uploadPtr, frame.data(), sourceBytes);
+        }
         submit(true);
         if (frames == 0 && dumpCoef) {
             // The first frame's wavelet bands (raw f32) and the 8x8 blocks'
@@ -375,11 +414,14 @@ int main(int argc, char** argv)
     bool debug = false;
     const char* dumpCoef = nullptr;
     bool selfTest = false;
+    bool nv12 = false;
     for (int i = 4; i < argc; i++)
         if (!std::strcmp(argv[i], "--debug"))
             debug = true;
         else if (!std::strcmp(argv[i], "--selftest"))
             selfTest = true;
+        else if (!std::strcmp(argv[i], "--nv12"))
+            nv12 = true;
     for (int i = 4; i + 1 < argc; i += 2) {
         if (!std::strcmp(argv[i], "--mbps"))
             mbps = std::atof(argv[i + 1]);
@@ -392,5 +434,5 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--repeat"))
             repeat = std::atoi(argv[i + 1]);
     }
-    return encode(argv[2], argv[3], mbps, packet, vendor, repeat, debug, dumpCoef, selfTest);
+    return encode(argv[2], argv[3], mbps, packet, vendor, repeat, debug, dumpCoef, selfTest, nv12);
 }
