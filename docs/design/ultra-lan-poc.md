@@ -608,9 +608,19 @@ lui-même. 60 clics par passe, aucun manqué ; résultats dans
   d'affichage, et une même configuration peut tomber d'une marche à l'autre
   d'une passe à l'autre. C'est une lecture, pas encore une mesure.
 
-### 6.6 U0.5 — rapport de la phase U0, brouillon (04/10/2026)
+### 6.6 U0.5 — rapport de la phase U0 (version finale du 05/10/2026)
 
-Brouillon, sans les TV (U0.3 quater) ni l'hôte à iGPU de la borne Steam.
+Le brouillon du 04/10 (`3c8ea54b`) avait servi à la porte U0, franchie le soir
+même. Cette version le complète avec ce que la phase U1 a appris depuis sur le
+banc. Seules les TV (U0.3 quater) manquent encore, et elles ne bloquent aucune
+porte.
+
+**0. Une correction qui vaut pour tout ce qui suit.** Le « 1 GbE » entre
+DualRTX et l'UM790Pro passe par un saut Wi-Fi 7 entre deux répéteurs (§6.10) :
+2,6 ms d'aller-retour, TCP à 74-90 Mbit/s, UDP propre jusqu'à ~150 Mbit/s, et un
+lien partagé avec la maison. Les chiffres « Ethernet » de U0 sont donc ceux d'un
+bon Wi-Fi. Le poste réseau du tableau (6-10 ms) en est gonflé d'environ 2 ms, et
+le reste est inchangé. Ils seront refaits sur câble.
 
 **1. Budget par étape, mesuré.** Les deux couples les mieux couverts, en ms :
 
@@ -626,7 +636,16 @@ Brouillon, sans les TV (U0.3 quater) ni l'hôte à iGPU de la borne Steam.
 En Wi-Fi, le réseau domine quand la cadence monte. La fenêtre de congestion
 d'usrsctp retient la vidéo : 186-232 ms au p90 sur le N95 à 120 i/s, 50-79 ms
 sur le Mac (plan Wi-Fi, `docs/design/network-latency-findings.md`). Sur un
-client mobile, c'est le décodeur. En Ethernet, aucun poste ne dépasse 6 ms.
+client mobile, c'est le décodeur. Sur le chemin de l'UM790Pro (« Ethernet »),
+aucun poste ne dépasse 6 ms, sauf le réseau : celui-ci compte le saut Wi-Fi 7.
+
+Deux postes que ce tableau ne montre pas, trouvés depuis :
+- **La composition chez le client** : 15-25 ms entre le dessin dans le canevas
+  et le bureau composé (U0.4). Le présentateur et le plein écran n'y changent
+  rien (U3, §6.9).
+- **La retenue de Chrome sur une piste vidéo RTP** : 7,8 ms en moyenne, le
+  métronome à 64 Hz de Blink (§6.11). Elle ne touche pas le DataChannel de
+  U0, mais tout transport RTP de la suite. La route audio la ramène à 0,2 ms.
 
 **2. Le modèle du §3, recalé.**
 - Le segment codec du HEVC est bien de 3 à 6 ms sur la RTX et l'Arc, en
@@ -640,10 +659,24 @@ client mobile, c'est le décodeur. En Ethernet, aucun poste ne dépasse 6 ms.
   coûte 58 ms dans Chrome contre 33-43 ms lu dans le canevas : 15 à 25 ms
   passent dans la composition de Chrome et du DWM. Steam, client natif, n'a
   pas ce poste.
+- Ce que le modèle sous-estimait : **le transport.** Le §3 comptait 2,8 ms de
+  sérialisation pour PyroWave à 170 Mbit/s. Le DataChannel plafonne à
+  95-107 Mbit/s sur ce chemin, et fait attendre la vidéo derrière toute
+  charge lourde de la même association (U1.2, §6.8). Le gain d'Ultra
+  dépend donc d'abord de la piste qui le porte (U1.4 : la route audio).
+- Segment codec, mesuré contre prédit : RTX 1,4-2 ms d'encodage (prédit 3,4
+  avec le décodage), Arc 3,5-4,5, AMF 4-4,3 en Ethernet. L'iGPU AMD encode
+  donc plus vite que prévu. Avec le décodage (0,4-5 ms), son segment HEVC
+  fait 5-9 ms, pas 10,5-18,5. Contre ~3,5-4 ms pour PyroWave au seuil, la
+  marge d'Ultra sur cet hôte tombe à 1-6 ms, au lieu de 4-12.
 
-**3. La borne Steam (U0.4, RTX).** PyroWave natif bat le HEVC de Steam de 15 ms
-en médiane, sur les passes propres (42,6 contre 57,9 ms, §6.5). La porte de U0.4 est
-franchie.
+**3. La borne Steam (U0.4, RTX puis iGPU AMD, §6.5).** Sur les passes propres,
+PyroWave natif bat le HEVC de Steam de 9 à 16 ms sur la RTX (42,6-49,2 contre
+57,9-58,5 ms), et d'environ 8 ms sur l'iGPU AMD. MoonlightWeb, au même outil,
+est au niveau du HEVC de Steam (57,3-58,2 ms). La porte de U0.4 (≥ 2 ms sur
+NVIDIA) est franchie.
+- Les médianes tombent sur des marches d'environ 8,3 ms, la période de l'écran
+  à 120 Hz : l'écart vaut une à deux images d'affichage.
 - Ce gain dépasse ce que le codec peut gagner seul : le modèle du §3 prédisait
   plutôt une légère perte sur NVIDIA, et l'encodage plus le décodage du HEVC ne
   coûtent ici que 3 à 7 ms.
@@ -660,15 +693,37 @@ U0.3 bis et ter). C'est la détection côté client (« Auto » avec détection,
 qui est sur `main` et sert de référence. `host-guarded` n'a pas battu
 l'« Auto » d'aujourd'hui (UA.3).
 
-**5. Proposition pour la porte U0** (décision de Bruno) :
-- Continuer vers U1 (labo transport), avec trois corrections au plan.
+**La barre « HEVC réglé Ultra » qui en découle** : l'« Auto » détecté lui-même
+(240 i/s sur l'UM790Pro, la cadence de l'écran ailleurs), HEVC, P1, tearing.
+Forcer 120 i/s avec un écran virtuel à 240 Hz ne fait jamais mieux, et fait
+décrocher le lien du N95 en Wi-Fi (§6.4).
+
+| Client, lien | « Auto » détecté : âge montré / clic → drapeau |
+|---|---|
+| UM790Pro, « Ethernet » | 24-27 / 35-43 ms |
+| Mac M1, Wi-Fi | 29-37 / 61-75 ms |
+| N95, Wi-Fi | 45-58 / 83-94 ms |
+| iPhone, Wi-Fi (« Mesurée ») | 41-48 ms (120 i/s forcé : 31-40) |
+
+L'iPhone est le seul client où forcer 120 i/s gagne (5-10 ms).
+
+**5. La porte U0, tranchée** (Bruno, 04/10, environ 23:45 : « Ok, go ») :
+- U1 lancé, avec trois corrections au plan :
   1. La référence de U3 et U5 devient l'« Auto » détecté.
-  2. Ultra reste réservé à l'Ethernet.
-  3. Le chemin de présentation (U3) passe avant le décodeur : il pèse 15 à
-     25 ms, plus que tout le segment codec.
-- Avant la porte : les TV (U0.3 quater) et l'hôte à iGPU de la borne Steam
-  (quand l'écran de l'AMD peut être le principal), parce que le gain attendu y
-  est le plus grand (§3 : 4 à 12 ms).
+  2. Ultra reste réservé à l'Ethernet, avec PyroWave au cœur.
+  3. Le chemin de présentation (U3) passe avant le décodeur.
+- Depuis, U3 a montré que le présentateur ne rend pas ces 15-25 ms (§6.9).
+  Le levier qui reste est le transport. Le DataChannel ne porte pas Ultra
+  (U1.2). La route audio le porte sur ce chemin, sans retenue de Chrome et
+  sans faire attendre la vidéo (U1.4 ter et quater, §6.11).
+
+**6. Ce qui reste ouvert de U0** :
+- **Les TV** (U0.3 quater) : budget par étape sur la Mi TV et la Freebox Player
+  POP, au créneau que Bruno fixera.
+- **Le câble** : les passes de U0, U1.2 et U1.4 sont à refaire sur un vrai
+  1 GbE, pour retirer le saut Wi-Fi 7 du poste réseau.
+- **MoonlightWeb sur l'iGPU AMD au même outil que Steam** : seule la RTX a sa
+  passe MoonlightWeb au photon.
 
 ### 6.7 Après la porte U0 : U1 lancé, U3 préparé (05/10/2026, nuit)
 
