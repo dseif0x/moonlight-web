@@ -564,6 +564,8 @@ def main():
     ap.add_argument("--name", default="", help="the client's name in the tags (default: the phase)")
     ap.add_argument("--bitrate", type=int, default=0, help="kbps; 0 = the automatic one")
     ap.add_argument("--tuning", default="", help="host keys for every pass (local_matrix --tuning)")
+    ap.add_argument("--codec", default="", help="h264 | hevc | av1 for every pass (pass.py --codec); "
+                    "the video's road comes from MW_RTP_VIDEO in this script's environment")
     ap.add_argument("--host", default="",
                     help="a native host on another machine (um790pro, mw-mac): its DEV "
                          "edition's native_tuning set to --tuning, pass.py --host against it")
@@ -588,6 +590,9 @@ def main():
     if a.exe:
         EXE = os.path.abspath(a.exe)
     contents = [c for c in a.contents.split(",") if c in CONTENTS]
+    if a.codec:
+        for c in contents:
+            CONTENTS[c] = CONTENTS[c] + ["--codec", a.codec]
     return phase(client, a.prefix, hosts, contents, a.rounds, a.cadences, a.udp, a.burst)
 
 
