@@ -1529,7 +1529,7 @@ void DataChannelRelay::handleVideoFrame(const QByteArray& data, bool isKeyframe,
             return;
         }
         if (isKeyframe && m_HaveBufferedKeyframe) m_NewKeyframeArrived = true;
-        sendRtpVideo(frameData, isKeyframe, presentationTimeUs);
+        sendRtpVideo(frameData, isKeyframe, presentationTimeUs, frameNumber);
         return;
     }
 
@@ -3064,13 +3064,15 @@ void DataChannelRelay::createRtpVideoTracks()
 
 void DataChannelRelay::sendAudioRoad(rtc::Track& track, AudioRoadHistory& history, uint16_t seq,
                                      const uint8_t* data, size_t size, bool isKeyframe,
-                                     uint32_t timestamp)
+                                     uint32_t timestamp, uint32_t frameId)
 {
     rtc::FrameInfo info(timestamp);
     info.isKeyFrame = isKeyframe;
     // One Opus packet per chunk: 'M', flags (1 = key), frame seq, index,
-    // count (u16, big endian), then up to kChunk bytes of the frame.
+    // count (u16, big endian), the wire frame id (u32, big endian), then up
+    // to kChunk bytes of the frame.
     constexpr size_t kChunk = 1100;
+    constexpr size_t kHead = 12;
     const size_t count = std::max<size_t>(1, (size + kChunk - 1) / kChunk);
     AudioRoadHistory::Frame kept;
     kept.seq = seq;
@@ -3079,17 +3081,21 @@ void DataChannelRelay::sendAudioRoad(rtc::Track& track, AudioRoadHistory& histor
     for (size_t i = 0; i < count; ++i) {
         const size_t off = i * kChunk;
         const size_t len = std::min(kChunk, size - off);
-        std::vector<rtc::byte> chunk(8 + len);
-        const uint8_t head[8] = {'M',
-                                 static_cast<uint8_t>(isKeyframe ? 1 : 0),
-                                 static_cast<uint8_t>(seq >> 8),
-                                 static_cast<uint8_t>(seq),
-                                 static_cast<uint8_t>(i >> 8),
-                                 static_cast<uint8_t>(i),
-                                 static_cast<uint8_t>(count >> 8),
-                                 static_cast<uint8_t>(count)};
-        std::memcpy(chunk.data(), head, 8);
-        std::memcpy(chunk.data() + 8, data + off, len);
+        std::vector<rtc::byte> chunk(kHead + len);
+        const uint8_t head[kHead] = {'M',
+                                     static_cast<uint8_t>(isKeyframe ? 1 : 0),
+                                     static_cast<uint8_t>(seq >> 8),
+                                     static_cast<uint8_t>(seq),
+                                     static_cast<uint8_t>(i >> 8),
+                                     static_cast<uint8_t>(i),
+                                     static_cast<uint8_t>(count >> 8),
+                                     static_cast<uint8_t>(count),
+                                     static_cast<uint8_t>(frameId >> 24),
+                                     static_cast<uint8_t>(frameId >> 16),
+                                     static_cast<uint8_t>(frameId >> 8),
+                                     static_cast<uint8_t>(frameId)};
+        std::memcpy(chunk.data(), head, kHead);
+        std::memcpy(chunk.data() + kHead, data + off, len);
         // The bench's loss (MW_AROAD_DROP, per mille): first sends only, so
         // the page's NACK path is what brings the chunk back.
         static const int dropPerMille = qEnvironmentVariableIntValue("MW_AROAD_DROP");
@@ -3140,7 +3146,7 @@ void DataChannelRelay::resendAudioRoad(const QJsonObject& msg)
 }
 
 void DataChannelRelay::sendRtpVideo(const QByteArray& frameData, bool isKeyframe,
-                                    int64_t presentationTimeUs)
+                                    int64_t presentationTimeUs, int frameNumber)
 {
     // The frame's capture on the host's steady clock, as sendFragmented stamps it.
     uint32_t backendTs = 0;
@@ -3158,13 +3164,24 @@ void DataChannelRelay::sendRtpVideo(const QByteArray& frameData, bool isKeyframe
     // Stamped now: how long after its capture the frame leaves (POC U1.4).
     const int64_t sendStartUs = steadyUs();
     try {
-        if (m_RtpVideoAudioRoad)
+        if (m_RtpVideoAudioRoad) {
+            // The DataChannel's frame id, and its map to the engine's frame
+            // number (sendFragmented's): a frame the page gives up on is
+            // named back by id, and a host that heals by invalidation answers
+            // with deltas instead of a keyframe.
+            const uint32_t frameId = m_FrameId++;
+            m_FrameNumberById[frameId % kFrameNumberRing].store(
+                frameNumber >= 0
+                    ? (static_cast<int64_t>(frameId) << 32) | static_cast<uint32_t>(frameNumber)
+                    : -1,
+                std::memory_order_release);
             sendAudioRoad(*m_VideoTrack, m_VideoRoadHistory, m_RtpAudioRoadSeq++,
                           reinterpret_cast<const uint8_t*>(frameData.constData()),
-                          static_cast<size_t>(frameData.size()), isKeyframe, backendTs);
-        else
+                          static_cast<size_t>(frameData.size()), isKeyframe, backendTs, frameId);
+        } else {
             m_VideoTrack->sendFrame(reinterpret_cast<const rtc::byte*>(frameData.constData()),
                                     static_cast<size_t>(frameData.size()), info);
+        }
         const int64_t endUs = steadyUs();
         m_RtpSendUs.push_back(static_cast<int>(endUs - sendStartUs));
         // backendTs is the steady clock in ms, mod 2^32: the difference wraps alike.

@@ -371,7 +371,10 @@ private:
     /// True once the answer accepted the video track: frames go there.
     bool rtpVideoActive() const;
     void createRtpVideoTracks();
-    void sendRtpVideo(const QByteArray& frameData, bool isKeyframe, int64_t presentationTimeUs);
+    // `frameNumber`: the engine's, for a reference invalidation when the page
+    // names the frame lost (-1 when unknown, as for the buffered keyframe).
+    void sendRtpVideo(const QByteArray& frameData, bool isKeyframe, int64_t presentationTimeUs,
+                      int frameNumber = -1);
     // What the audio road sent lately, per track, for the page's NACKs (U1.4
     // quater): the chunks of the last frames as they went, with their RTP
     // timestamp.
@@ -389,8 +392,11 @@ private:
         int resent = 0;
     };
     AudioRoadHistory m_VideoRoadHistory, m_UltraRoadHistory;
+    // `frameId`: the video's wire frame id (the DataChannel's sequence), so
+    // the page can name a lost frame to a host that heals by invalidation.
     void sendAudioRoad(rtc::Track& track, AudioRoadHistory& history, uint16_t seq,
-                       const uint8_t* data, size_t size, bool isKeyframe, uint32_t timestamp);
+                       const uint8_t* data, size_t size, bool isKeyframe, uint32_t timestamp,
+                       uint32_t frameId = 0);
     void resendAudioRoad(const QJsonObject& msg);
     std::shared_ptr<rtc::DataChannel> m_InputDc;
     // The HID passthrough's reports (id 4, unordered, never retransmitted): a
