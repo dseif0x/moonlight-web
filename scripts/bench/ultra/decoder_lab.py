@@ -61,16 +61,22 @@ def main():
     ap.add_argument("--stages", default="", help="time one stage alone: dequant, idwt or pack")
     ap.add_argument("--chrome-arg", action="append", default=[])
     ap.add_argument("--show", action="store_true", help="print each frame's line")
+    ap.add_argument("--power", default="high-performance", help="the adapter asked for: high-performance or low-power")
+    # Another machine's Chrome, reached through SSH tunnels: its DevTools port
+    # forwarded here (-L), and this server forwarded there (-R) on the same
+    # port, so both ends stay on the loopback.
+    ap.add_argument("--remote-cdp", type=int, default=0, help="DevTools port of an already running Chrome")
+    ap.add_argument("--http-port", type=int, default=0, help="fixed port for the server (remote runs)")
     a = ap.parse_args()
 
-    http_port = free_port()
+    http_port = a.http_port or free_port()
     server = http.server.ThreadingHTTPServer(
         ("127.0.0.1", http_port), functools.partial(Handler, directory=REPO))
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    cdp_port = free_port()
+    cdp_port = a.remote_cdp or free_port()
     profile = tempfile.mkdtemp(prefix="mw-pyrowave-lab-")
-    chrome = subprocess.Popen([
+    chrome = None if a.remote_cdp else subprocess.Popen([
         CHROME, "--headless=new", "--remote-debugging-port=%d" % cdp_port,
         "--user-data-dir=" + profile, "--no-first-run", "--no-default-browser-check",
         "--enable-unsafe-webgpu", "--enable-webgpu-developer-features", "about:blank",
@@ -98,7 +104,8 @@ def main():
         for clip in a.clips.split(","):
             for mbps in a.mbps.split(","):
                 url = ("http://127.0.0.1:%d/scripts/bench/ultra/decoder-lab.html?clip=%s&mbps=%s&ref=%s"
-                       "&frames=%d&timing=%d&stages=%s&warm=%d" % (http_port, clip, mbps, a.ref, a.frames, a.timing, a.stages, a.warm))
+                       "&frames=%d&timing=%d&stages=%s&warm=%d&power=%s" % (http_port, clip, mbps, a.ref, a.frames, a.timing,
+                                                                    a.stages, a.warm, a.power))
                 call("Page.navigate", url=url)
                 time.sleep(1)
                 r = call("Runtime.evaluate", expression="window.__labResult", awaitPromise=True,
@@ -119,11 +126,12 @@ def main():
                          "%.3f" % g["p50"] if g else "-", "%.3f" % g["p99"] if g else "-",
                          " ERRORS %s" % res["errors"] if res["errors"] else ""))
     finally:
-        chrome.terminate()
-        try:
-            chrome.wait(10)
-        except subprocess.TimeoutExpired:
-            chrome.kill()
+        if chrome:
+            chrome.terminate()
+            try:
+                chrome.wait(10)
+            except subprocess.TimeoutExpired:
+                chrome.kill()
         server.shutdown()
         shutil.rmtree(profile, ignore_errors=True)
     with open(os.path.join(CORPUS, "decoder-lab.json"), "w", encoding="utf-8") as f:

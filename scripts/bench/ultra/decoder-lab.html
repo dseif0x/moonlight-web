@@ -82,7 +82,7 @@
 
       async function run() {
         const adapter = await navigator.gpu.requestAdapter({
-          powerPreference: "high-performance",
+          powerPreference: q.get("power") || "high-performance",
         });
         const info = adapter.info || {};
         const hasTs = adapter.features.has("timestamp-query");
