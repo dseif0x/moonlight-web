@@ -1222,6 +1222,51 @@ aucun événement de pilote dans le journal Système après les passes.
 **Reste** : l'intégration (U4) : l'encodeur dans le moteur, la
 route audio comme transport, et le décodeur de §6.13 dans le client.
 
+### 6.15 U4 : PyroWave dans MoonlightWeb, derrière des clés cachées (05/10/2026, nuit)
+
+Écrit sans banc ni GPU réel. La première mesure de bout en bout attend le feu
+vert du coordinateur.
+
+**L'hôte** (`3c1e908a`, `e28183a2`, `e27da614`).
+- `PyroWaveEncoder12` est désormais un encodeur du moteur
+  (`src/encode/windows/d3d12/`). L'outil de labo compile le même fichier.
+- `UltraEncoder12` est un troisième `IVideoEncoder12` de la route D3D12, à côté
+  de VE, NVENC et AMF.
+  - Il attend la conversion sur le GPU, puis copie les deux plans de l'image
+    NV12 dans un tampon, à leurs empreintes de copie.
+  - Il encode sur une file COMPUTE à lui, avec la priorité que le moteur donne
+    à ses files.
+  - Il rend l'image comme une image clé : tous ses paquets PyroWave bout à
+    bout. Une demande d'image clé ne lui coûte rien, et une image perdue ne
+    demande aucune réparation.
+- La DWT lit la chroma entrelacée du NV12 (`kind` 2). Sur WARP, le flux est
+  identique octet pour octet à celui de la source en plans séparés, et la
+  validation côté GPU ne signale rien.
+- Les clés de banc : `pipeline=d3d12,enc12=pyrowave`, et `ultrambps=<Mbit/s>`
+  (170 par défaut). La route D3D12 l'accepte sur ses trois GPU : il n'y a ni
+  codec à négocier, ni vague de rafraîchissement à obtenir. Les tests natifs de
+  choix de route le couvrent.
+- Le transport ne change pas : c'est la route audio, avec le numéro d'image
+  (`native:hevc+aroad`).
+
+**La page** (`82ba6d5f`, `216c690f`).
+- `PyroWaveDecoder.present()` dessine l'image en RGB (BT.709, plage limitée)
+  dans un canevas WebGPU. Le chemin complet décodage → OffscreenCanvas →
+  `VideoFrame` → Canvas2D reste à 3 niveaux près de la conversion faite en
+  JavaScript sur l'image de l'oracle.
+- `UltraPlayer` garde une seule image en vol, et la plus fraîche en attente
+  gagne. Il rend une `VideoFrame`.
+- Avec `localStorage mw_ultra=pyrowave`, StreamView dimensionne le lecteur
+  d'après le premier en-tête de début de trame. Il fait ensuite passer ses
+  images par `onDecodedFrame` : la cadence, le présentateur Canvas2D, le
+  journal par image et la sonde de latence marchent sans changement.
+
+**La première passe proposée** : la `--dev` de `build/` (seul exe à avoir sa
+règle de pare-feu), avec `MW_NATIVE_TUNING=pipeline=d3d12,enc12=pyrowave` et
+`MW_RTP_VIDEO=native:hevc+aroad`, l'hôte RTX, et Chrome sur l'UM790Pro avec
+`mw_ultra=pyrowave`. Puis la même passe en HEVC, sur le même chemin, pour
+comparer.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
