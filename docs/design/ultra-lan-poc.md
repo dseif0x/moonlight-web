@@ -1207,16 +1207,19 @@ aucun événement de pilote dans le journal Système après les passes.
 |---|---|---|---|---|
 | RTX 5060 Ti | 0,63-0,68 ms (0,66-0,73) | 0,15 / 0,11-0,14 / 0,24-0,32 | 0,14 ms | NVENC 1,4-2 ms |
 | iGPU AMD (2 CU) | 8,0-8,2 ms (8,5-8,7) | 4,5 / 1,2-1,6 / 1,2-1,4 | ~2-3 ms | AMF 4-4,3 ms |
-| Arc A380 | à mesurer, après la série W4 de la session Wi-Fi | | faux (§6.12) | VE 3,5-4,5 ms |
+| Arc A380 | 4,4-4,5 ms (4,5-7,8) | 0,7 / 2,8-6,1 / 0,5-0,6 | faux (§6.12) | VE 3,5-4,5 ms |
 
 - **Sur la RTX, c'est déjà moins que NVENC**, mais quatre fois l'amont : les
   passes en série (un thread par bloc) et l'assemblage octet par octet coûtent.
+- **Sur l'Arc (22:19, au feu vert), c'est à peu près la vitesse de VE.** La
+  quantification en prend l'essentiel : un thread par bloc 8×8, qui boucle en
+  série, convient mal aux GPU Intel.
 - **Sur le petit iGPU AMD, c'est plus lent qu'AMF.** Comme pour le décodeur
   (§6.13), ce GPU à 2 CU est limité par le calcul, et la DWT en prend la
   moitié. Paralléliser les passes en série et alléger la DWT est la suite côté
   hôte, à mesurer aussi sur le 780M.
 
-**Reste** : l'Arc. Puis l'intégration (U4) : l'encodeur dans le moteur, la
+**Reste** : l'intégration (U4) : l'encodeur dans le moteur, la
 route audio comme transport, et le décodeur de §6.13 dans le client.
 
 ## 7. Concrètement, pour l'utilisateur
