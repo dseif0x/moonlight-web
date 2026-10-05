@@ -627,6 +627,10 @@
     flex-direction: column;
     gap: 8px;
 }
+/* Keeps "Add a device" off the last device; nothing to clear when empty. */
+.settings-hid-list:not(:empty) {
+    margin-bottom: var(--space-3);
+}
 .settings-pad {
     display: flex;
     align-items: center;
