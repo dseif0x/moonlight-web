@@ -853,6 +853,7 @@ void DataChannelRelay::setLinkBench(const mw::native::EncoderTuning& tuning)
     m_FloodLikeVideo = tuning.floodLikeVideo;
     m_UltraSynthKb = tuning.ultraSynthKb;
     m_UltraUnordered = tuning.ultraUnordered;
+    m_AroadPace = tuning.aroadPace;
     m_PaceMultiple = tuning.paceMultiple;
     m_PaceBurstKb = tuning.paceBurstKb;
     m_SctpBufferKb = tuning.sctpBufferKb;
@@ -1974,6 +1975,17 @@ void DataChannelRelay::onInputMessage(const std::string& message, int64_t recvUs
                 }
                 m_LinkSctp = now;
                 m_LinkSctpSet = true;
+                // The audio road's chunks the page asked again, per thousand
+                // sent: the same signal, where SCTP has no say.
+                const int64_t sent = m_AroadSent.load(std::memory_order_relaxed);
+                const int64_t resent = m_AroadResent.load(std::memory_order_relaxed);
+                const int64_t dSent = sent - m_LinkAroadSent;
+                const int64_t dResent = resent - m_LinkAroadResent;
+                m_LinkAroadSent = sent;
+                m_LinkAroadResent = resent;
+                if (dSent > 0)
+                    fb.retransPermille =
+                        std::max(fb.retransPermille, static_cast<int>(dResent * 1000 / dSent));
             }
             // Present, and true, only on the first report after the page came
             // back from the background (StreamView._resyncAfterHidden).
@@ -2541,7 +2553,7 @@ void DataChannelRelay::sendUltraSynthetic(uint32_t backendTs)
         info.isKeyFrame = true;
         try {
             if (m_UltraAudioRoad)
-                sendAudioRoad(*m_UltraTrack, m_UltraRoadHistory, m_UltraAudioRoadSeq++,
+                sendAudioRoad(m_UltraTrack, m_UltraRoadHistory, m_UltraAudioRoadSeq++,
                               reinterpret_cast<const uint8_t*>(frame.data()), frame.size(), true,
                               backendTs);
             else
@@ -3060,11 +3072,23 @@ void DataChannelRelay::createRtpVideoTracks()
         m_UltraTrack->setMediaHandler(packetizer);
         m_UltraTrack->onOpen([]() { qInfo() << "[DataChannelRelay] Ultra RTP track open"; });
     }
+    // The audio road has no congestion control of its own: its chunks leave
+    // paced (AroadPacer.h), 3 times what it carries by default, 50 Mbit/s at
+    // least, 16 KiB at most back to back.
+    if ((m_RtpVideoAudioRoad || m_UltraAudioRoad) && !m_AroadPacer) {
+        const double multiple = m_AroadPace < 0 ? 3.0 : m_AroadPace;
+        if (multiple > 0) {
+            m_AroadPacer = std::make_unique<AroadPacer>(multiple, 50'000'000 / 8, 16 * 1024);
+            qInfo() << "[DataChannelRelay] audio road paced at" << multiple
+                    << "x what it carries, 50 Mbit/s at least (aroadpace=)";
+        }
+    }
 }
 
-void DataChannelRelay::sendAudioRoad(rtc::Track& track, AudioRoadHistory& history, uint16_t seq,
-                                     const uint8_t* data, size_t size, bool isKeyframe,
-                                     uint32_t timestamp, uint32_t frameId)
+void DataChannelRelay::sendAudioRoad(const std::shared_ptr<rtc::Track>& track,
+                                     AudioRoadHistory& history, uint16_t seq, const uint8_t* data,
+                                     size_t size, bool isKeyframe, uint32_t timestamp,
+                                     uint32_t frameId)
 {
     rtc::FrameInfo info(timestamp);
     info.isKeyFrame = isKeyframe;
@@ -3100,10 +3124,15 @@ void DataChannelRelay::sendAudioRoad(rtc::Track& track, AudioRoadHistory& histor
         // the page's NACK path is what brings the chunk back.
         static const int dropPerMille = qEnvironmentVariableIntValue("MW_AROAD_DROP");
         if (dropPerMille <= 0 ||
-            static_cast<int>(QRandomGenerator::global()->bounded(1000)) >= dropPerMille)
-            track.sendFrame(chunk.data(), chunk.size(), info);
+            static_cast<int>(QRandomGenerator::global()->bounded(1000)) >= dropPerMille) {
+            if (m_AroadPacer)
+                m_AroadPacer->send(track, chunk, timestamp, false);
+            else
+                track->sendFrame(chunk.data(), chunk.size(), info);
+        }
         kept.chunks.push_back(std::move(chunk));
     }
+    m_AroadSent.fetch_add(static_cast<int64_t>(count), std::memory_order_relaxed);
     std::lock_guard<std::mutex> lk(history.mutex);
     history.frames.push_back(std::move(kept));
     while (history.frames.size() > history.maxFrames)
@@ -3129,8 +3158,11 @@ void DataChannelRelay::resendAudioRoad(const QJsonObject& msg)
             const int i = v.toInt(-1);
             if (i < 0 || i >= static_cast<int>(f.chunks.size())) continue;
             try {
-                track->sendFrame(f.chunks[static_cast<size_t>(i)].data(),
-                                 f.chunks[static_cast<size_t>(i)].size(), info);
+                if (m_AroadPacer)
+                    m_AroadPacer->send(track, f.chunks[static_cast<size_t>(i)], f.timestamp, true);
+                else
+                    track->sendFrame(f.chunks[static_cast<size_t>(i)].data(),
+                                     f.chunks[static_cast<size_t>(i)].size(), info);
                 ++n;
             } catch (const std::exception& e) {
                 qWarning() << "[DataChannelRelay] audio road resend failed:" << e.what();
@@ -3138,6 +3170,7 @@ void DataChannelRelay::resendAudioRoad(const QJsonObject& msg)
             }
         }
         history.resent += n;
+        m_AroadResent.fetch_add(n, std::memory_order_relaxed);
         if (history.resent == n || history.resent / 200 != (history.resent - n) / 200)
             qInfo() << "[DataChannelRelay] audio road" << (ultra ? "Ultra" : "video")
                     << "chunks resent so far:" << history.resent;
@@ -3175,7 +3208,7 @@ void DataChannelRelay::sendRtpVideo(const QByteArray& frameData, bool isKeyframe
                     ? (static_cast<int64_t>(frameId) << 32) | static_cast<uint32_t>(frameNumber)
                     : -1,
                 std::memory_order_release);
-            sendAudioRoad(*m_VideoTrack, m_VideoRoadHistory, m_RtpAudioRoadSeq++,
+            sendAudioRoad(m_VideoTrack, m_VideoRoadHistory, m_RtpAudioRoadSeq++,
                           reinterpret_cast<const uint8_t*>(frameData.constData()),
                           static_cast<size_t>(frameData.size()), isKeyframe, backendTs, frameId);
         } else {

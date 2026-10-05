@@ -25,6 +25,7 @@
 #include "LinkLoss.h"
 #include "RelayFrameLog.h"
 #include "SctpCounters.h"
+#include "AroadPacer.h"
 #include "mw/native/EncoderTuning.h"
 #include <QByteArray>
 #include <QElapsedTimer>
@@ -394,10 +395,17 @@ private:
     AudioRoadHistory m_VideoRoadHistory, m_UltraRoadHistory;
     // `frameId`: the video's wire frame id (the DataChannel's sequence), so
     // the page can name a lost frame to a host that heals by invalidation.
-    void sendAudioRoad(rtc::Track& track, AudioRoadHistory& history, uint16_t seq,
-                       const uint8_t* data, size_t size, bool isKeyframe, uint32_t timestamp,
-                       uint32_t frameId = 0);
+    void sendAudioRoad(const std::shared_ptr<rtc::Track>& track, AudioRoadHistory& history,
+                       uint16_t seq, const uint8_t* data, size_t size, bool isKeyframe,
+                       uint32_t timestamp, uint32_t frameId = 0);
     void resendAudioRoad(const QJsonObject& msg);
+    // The road's paced sender (AroadPacer.h), made with the road's tracks;
+    // null with aroadpace=0. Its first sends and resends, counted for the
+    // rate governor next to SCTP's retransmissions (linkstats).
+    std::unique_ptr<AroadPacer> m_AroadPacer;
+    double m_AroadPace = -1;
+    std::atomic<int64_t> m_AroadSent{0}, m_AroadResent{0};
+    int64_t m_LinkAroadSent = 0, m_LinkAroadResent = 0;
     std::shared_ptr<rtc::DataChannel> m_InputDc;
     // The HID passthrough's reports (id 4, unordered, never retransmitted): a
     // lost one is repaired by the next, the page repeats an unchanged report.

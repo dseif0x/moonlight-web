@@ -307,6 +307,7 @@ add_executable(mw-server
     src/streaming/SctpCounters.cpp
     src/streaming/SctpFlood.cpp
     src/streaming/FrameSender.cpp
+    src/streaming/AroadPacer.cpp
     src/streaming/MediaTrackRelay.cpp
     src/streaming/SignalingServer.cpp
     src/streaming/StreamWorkerHost.cpp

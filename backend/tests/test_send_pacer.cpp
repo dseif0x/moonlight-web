@@ -12,6 +12,7 @@
  * bucket to one burst and no more; a clock that goes back costs no wait.
  */
 
+#include "../src/streaming/AroadPacer.h"
 #include "../src/streaming/SendPacer.h"
 
 #include "test_framework.h"
@@ -99,5 +100,19 @@ void run_send_pacer_tests()
         CHECK(now > 1300 && now < 1500);
         // The next frame, 8.3 ms later: a full burst again, no wait.
         CHECK_EQ(p.waitUs(16017, now + 8333), int64_t(0));
+    }
+
+    SECTION("AroadPacer — the rate follows what the road carries, above its floor");
+    {
+        // Off: everything at once.
+        CHECK_EQ(AroadPacer::rateFor(0, 6'250'000, 2'500'000), int64_t(0));
+        // 10 Mbit/s of HEVC at 3x: under the 50 Mbit/s floor.
+        CHECK_EQ(AroadPacer::rateFor(3, 6'250'000, 1'250'000), int64_t(6'250'000));
+        // 20 Mbit/s at 3x: 60 Mbit/s, over it.
+        CHECK_EQ(AroadPacer::rateFor(3, 6'250'000, 2'500'000), int64_t(7'500'000));
+        // 122 Mbit/s of Ultra at 3x: 366 Mbit/s.
+        CHECK_EQ(AroadPacer::rateFor(3, 6'250'000, 15'250'000), int64_t(45'750'000));
+        // Nothing carried yet: the floor.
+        CHECK_EQ(AroadPacer::rateFor(3, 6'250'000, 0), int64_t(6'250'000));
     }
 }
