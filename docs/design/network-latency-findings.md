@@ -1033,7 +1033,12 @@ What the measurements support, in order of the path:
   their time of day.
 - RTO minimum (200 ms) and the lone-frame T3 tail (25/09): never A/B'd.
 - DSCP/WMM marking of the video, from the host (W2 item 5 of the plan): not
-  tried.
+  tried. It would come for free on the audio road, though (§3,
+  05/10): libdatachannel marks every audio track EF (DSCP 46). A Linux or
+  macOS host would then put the video in the Wi-Fi voice queue (AC_VO), while
+  on Windows libjuice marks nothing. To measure before that road ships: does
+  AC_VO shorten the video's wait, and does a video-sized flow in it starve the
+  house's other stations, or the AP's own policing?
 
 ## 7. Knobs (bench keys, off by default unless said)
 
