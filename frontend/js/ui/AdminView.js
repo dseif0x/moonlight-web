@@ -2209,12 +2209,14 @@ export class AdminView {
                             }
                         </div>
                         <p class="settings-hint u-mt-2">${t('admin.remoteAdminHint')}</p>
-                        <label class="settings-checkbox-label u-mt-2">
-                            <input type="checkbox" id="chk-remote-admin-internet"
-                                   ${this._remoteAdminInternet ? 'checked' : ''} />
-                            <span class="settings-checkbox-text">${t('admin.remoteAdminInternet')}</span>
-                        </label>
-                        <p class="setting-desc">${t('admin.remoteAdminInternetDesc')}</p>`
+                        <div class="u-mt-3">
+                            <label class="settings-checkbox-label">
+                                <input type="checkbox" id="chk-remote-admin-internet"
+                                       ${this._remoteAdminInternet ? 'checked' : ''} />
+                                <span class="settings-checkbox-text">${t('admin.remoteAdminInternet')}</span>
+                            </label>
+                            <p class="setting-desc">${t('admin.remoteAdminInternetDesc')}</p>
+                        </div>`
                                 : ''
                         }
                     </div>
