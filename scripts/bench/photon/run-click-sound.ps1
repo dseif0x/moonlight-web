@@ -3,15 +3,17 @@
 # click to send, and not the user's audio session). A one-shot Interactive
 # scheduled task, waited for, then its output printed and the task removed.
 # Same pattern as run-in-console.ps1.
-#   powershell -File run-click-sound.ps1 -Tag a1-n95 -Arguments '--tick 120 --flag 883,27'
-#   powershell -File run-click-sound.ps1 -Tag a1-n95c -Arguments '--clicks 30 --flag 883,27'
+#   powershell -File run-click-sound.ps1 -Tag a1-n95 -Arguments "--tick 120 --window MoonlightWeb"
+#   powershell -File run-click-sound.ps1 -Tag a1-n95c -Arguments "--clicks 30 --window MoonlightWeb"
 # -Wait: how long to wait for it, in seconds (default: 60 more than a --tick).
 param(
     [Parameter(Mandatory)] [string] $Tag,
     [string] $Arguments = '--tick 60',
     [int] $Wait = 0,
-    [string] $Dir = $PSScriptRoot
+    [string] $Dir = ''
 )
+# $PSScriptRoot is empty in a param default under Windows PowerShell 5.1.
+if (-not $Dir) { $Dir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $exe = Join-Path $Dir 'mw-click-sound.exe'
 $out = Join-Path $Dir "$Tag.json"
 $log = Join-Path $Dir "$Tag.txt"

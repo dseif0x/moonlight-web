@@ -96,6 +96,8 @@ struct Onsets
 std::atomic<bool> g_Run{true};
 Onsets g_Sound, g_Flag;
 std::atomic<int> g_SoundReady{0}; // 1 capturing, -1 failed
+// The loudest sample heard, x1000: how far a missed beep stayed under the threshold.
+std::atomic<int> g_MaxPeakMilli{0};
 constexpr int64_t kRefractoryUs = 150'000;
 
 // WASAPI loopback of the default output. Polls every millisecond: loopback
@@ -166,6 +168,7 @@ void soundThread(float threshold)
                         v = reinterpret_cast<const int16_t*>(data)[i * channels + c] / 32768.0f;
                     peak = std::max(peak, std::fabs(v));
                 }
+                if (peak * 1000 > g_MaxPeakMilli) g_MaxPeakMilli = static_cast<int>(peak * 1000);
                 if (peak >= threshold) {
                     const int64_t t = firstUs + static_cast<int64_t>(i * 1e6 / rate);
                     if (t - lastOnset >= kRefractoryUs) {
@@ -237,12 +240,17 @@ bool flagPointInWindow(const std::string& title, int& x, int& y)
     f.title.assign(title.begin(), title.end());
     EnumWindows(findWindow, reinterpret_cast<LPARAM>(&f));
     if (!f.found) return false;
+    // The client area, on the screen: a maximised window's title bar and
+    // borders are not the stream.
     RECT r;
-    if (!GetWindowRect(f.found, &r)) return false;
-    x = r.left + static_cast<int>((r.right - r.left) * 0.46);
-    y = r.top + static_cast<int>((r.bottom - r.top) * 0.025);
-    std::fprintf(stderr, "window %ld,%ld-%ld,%ld: the flag's blue band read at %d,%d\n", r.left,
-                 r.top, r.right, r.bottom, x, y);
+    if (!GetClientRect(f.found, &r)) return false;
+    POINT tl = {r.left, r.top}, br = {r.right, r.bottom};
+    ClientToScreen(f.found, &tl);
+    ClientToScreen(f.found, &br);
+    x = tl.x + static_cast<int>((br.x - tl.x) * 0.46);
+    y = tl.y + static_cast<int>((br.y - tl.y) * 0.025);
+    std::fprintf(stderr, "window client %ld,%ld-%ld,%ld: the flag's blue band read at %d,%d\n",
+                 tl.x, tl.y, br.x, br.y, x, y);
     return true;
 }
 
@@ -313,9 +321,20 @@ int main(int argc, char** argv)
     QueryPerformanceFrequency(&f);
     g_QpcToUs = 1e6 / static_cast<double>(f.QuadPart);
     timeBeginPeriod(1);
-    if (!window.empty() && !flagPointInWindow(window, flagX, flagY)) {
-        std::fprintf(stderr, "no visible window titled *%s*\n", window.c_str());
-        return 1;
+    if (!window.empty()) {
+        // The stream may open after this starts (a series pass): wait for its
+        // window, then for it to settle (kiosk, full screen) and read it again.
+        bool found = false;
+        for (int i = 0; i < 180 && !found; ++i) {
+            found = flagPointInWindow(window, flagX, flagY);
+            if (!found) Sleep(1000);
+        }
+        if (!found) {
+            std::fprintf(stderr, "no visible window titled *%s*\n", window.c_str());
+            return 1;
+        }
+        Sleep(3000);
+        flagPointInWindow(window, flagX, flagY);
     }
 
     std::thread sound(soundThread, threshold);
@@ -344,7 +363,8 @@ int main(int argc, char** argv)
                 if (best < 0 || std::llabs(u - t) < std::llabs(best - t)) best = u;
             if (best >= 0 && std::llabs(best - t) <= 250'000) avMs.push_back((t - best) / 1000.0);
         }
-        std::printf("tick: %zu beeps, %zu flags, %zu paired\n", s.size(), fl.size(), avMs.size());
+        std::printf("tick: %zu beeps, %zu flags, %zu paired; loudest sample %.3f\n", s.size(),
+                    fl.size(), avMs.size(), g_MaxPeakMilli / 1000.0);
     } else {
         for (int k = 0; k < clicks; ++k) {
             const int64_t t0 = qpcUs();
