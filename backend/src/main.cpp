@@ -64,6 +64,7 @@
 #include <memory>
 #include <utility>
 #include "server/AppSettings.h"
+#include "server/ClientUniqueId.h"
 #include "server/LogArchive.h"
 #include "server/routes/LogRoutes.h"
 #include "common/RunFlags.h"
@@ -2173,6 +2174,52 @@ int main(int argc, char* argv[])
         std::unique_ptr<IStreamBackend> backend = computerManager.backendForHost(hostUuid);
         return backend && backend->capabilities().resumableApps;
     };
+    // Where each device runs its own app (MultiSeat: a seat, an Apollo, per
+    // device), quitting is the device's business, done through the backend
+    // under the seat's own certificate. Never the machine's GameStream server:
+    // a /cancel sent there reached no seat — the seat's app kept running — and
+    // would have ended whatever the machine itself was streaming (MultiSeat
+    // bench, 05/10/2026).
+    auto quitsPerDevice = [&computerManager](const QString& hostUuid) {
+        std::unique_ptr<IStreamBackend> backend = computerManager.backendForHost(hostUuid);
+        return backend && backend->capabilities().runningAppPerDevice;
+    };
+    auto quitDeviceApp = [&computerManager](const QString& hostUuid, const QString& uid,
+                                            std::function<void(bool ok, QString why)> done) {
+        std::shared_ptr<IStreamBackend> backend(computerManager.backendForHost(hostUuid).release());
+        if (!backend || uid.isEmpty()) {
+            if (done) done(false, QStringLiteral("No device to quit the app of"));
+            return;
+        }
+        // The callback keeps the backend alive: its replies are parented to it.
+        backend->quit(QString(), uid, [backend, done](bool ok, const BackendError& err) {
+            if (done) done(ok, err.message);
+        });
+    };
+    // The seat policy (Bruno, 05/10/2026): a device's seat is free again once
+    // it has neither a stream nor a running app. A game left running is never
+    // cut, and there is no idle timer. Asked after every stream end and quit.
+    auto releaseSeatIfIdle = [&computerManager, &g_Pool](const QString& hostUuid,
+                                                         const QString& uid) {
+        if (uid.isEmpty()) return;
+        std::shared_ptr<IStreamBackend> backend(computerManager.backendForHost(hostUuid).release());
+        if (!backend || !backend->capabilities().runningAppPerDevice) return;
+        auto streaming = [&g_Pool, hostUuid, uid]() {
+            for (int i = 0; i < g_Pool.size(); ++i) {
+                const SessionPool::Slot& sl = g_Pool.at(i);
+                if (sl.worker && sl.hostUuid == hostUuid && sl.clientUniqueId == uid) return true;
+            }
+            return false;
+        };
+        if (streaming()) return;
+        backend->runningAppForDevice(
+            uid, [backend, streaming, uid](bool ok, const BackendError&, int appId) {
+                // Unknown is not idle: keep the seat rather than hand a running
+                // game's account to someone else.
+                if (!ok || appId != 0 || streaming()) return;
+                backend->releaseDevice(uid);
+            });
+    };
     // "MoonlightWeb Virtual Display" goes off only once nothing streams it,
     // judged when its grace runs out rather than when a stream ends: a
     // take-over's /start asks for it before the stream it replaces is torn
@@ -2751,10 +2798,11 @@ int main(int argc, char* argv[])
                                                         &g_DualSupport, &g_LastStandbyStartMs,
                                                         &g_LiveSunshineUids, &g_PendingHostCancels,
                                                         &dropPendingHostCancel, &detachWorkerSlot,
-                                                        &slotSignalingPort, &slotWsPath,
-                                                        &anyOtherSlotLive, &reapCoopSession,
-                                                        &server, &appSettings, &authManager,
-                                                        &sessionMetrics, &routerPorts,
+                                                        &quitsPerDevice, &quitDeviceApp,
+                                                        &releaseSeatIfIdle, &slotSignalingPort,
+                                                        &slotWsPath, &anyOtherSlotLive,
+                                                        &reapCoopSession, &server, &appSettings,
+                                                        &authManager, &sessionMetrics, &routerPorts,
                                                         stunServer](const HttpRequest& req,
                                                                     ResponseCallback respond) {
         QString uuid = req.pathParams.value("id");
@@ -3153,12 +3201,8 @@ int main(int argc, char* argv[])
         // Per-browser Sunshine unique ID (from the browser's localStorage).
         // Sanitized to hex (max 32 chars) before it reaches the launch URL.
         // Empty → StreamSession falls back to the shared Moonlight unique ID.
-        QString reqClientUniqueId;
-        for (const QChar& c : body["client_uniqueid"].toString()) {
-            QChar u = c.toUpper();
-            if (u.isDigit() || (u >= 'A' && u <= 'F')) reqClientUniqueId += u;
-            if (reqClientUniqueId.size() >= 32) break;
-        }
+        const QString reqClientUniqueId =
+            sanitizeClientUniqueId(body["client_uniqueid"].toString());
 
         // This browser is back for the session its last worker left behind.
         if (!reqClientUniqueId.isEmpty() && dropPendingHostCancel(reqClientUniqueId, host->uuid))
@@ -3832,7 +3876,7 @@ int main(int argc, char* argv[])
                  &g_PendingHostCancels, &dropPendingHostCancel, &anyOtherSlotLive, &computerManager,
                  &authManager, &reapCoopSession, &sessionMetrics, sessionFacts, sessionStartedAt,
                  reqSlot, host, hostUuidCopy, uid, sessionToken, coopSessionId, backendResumable,
-                 quitAppOnEnd]() {
+                 quitAppOnEnd, &quitsPerDevice, &quitDeviceApp, &releaseSeatIfIdle]() {
                     qInfo() << "[main] Stream worker ended (slot" << reqSlot << ", uid=" << uid
                             << ")";
                     // Pairs with the start above: a non-zero timestamp is proof
@@ -3879,10 +3923,41 @@ int main(int argc, char* argv[])
                     // the viewer resumes it from its card, or quits it there —
                     // unless they asked for the app to close with the stream.
                     const bool keepApp = backendResumable && !quitAppOnEnd;
+                    // Each device on its own seat: the other devices streaming
+                    // this host are on other seats, and the app to quit is on
+                    // this device's — through the backend, never the machine.
+                    const bool perDevice = quitsPerDevice(hostUuidCopy);
                     if (keepApp) {
                         qInfo() << "[main] Stream ended — the app keeps running on the host "
                                    "for a later resume";
                         if (!siblingLive) computerManager.refreshRunningApp(hostUuidCopy);
+                        // Its seat goes back to the pool if the game ended too.
+                        if (perDevice) releaseSeatIfIdle(hostUuidCopy, uid);
+                    } else if (perDevice) {
+                        // Same grace as below, for the same relaunch: a transport
+                        // rung that failed comes back within it.
+                        dropPendingHostCancel(uid, hostUuidCopy);
+                        QTimer::singleShot(
+                            kHostCancelGraceMs, qApp,
+                            [&g_Pool, &g_LiveSunshineUids, quitDeviceApp, releaseSeatIfIdle,
+                             hostUuidCopy, uid]() {
+                                for (int i = 0; i < g_Pool.size(); ++i) {
+                                    const SessionPool::Slot& s = g_Pool.at(i);
+                                    if (s.worker && s.hostUuid == hostUuidCopy &&
+                                        s.clientUniqueId == uid) {
+                                        qInfo() << "[main] The device came back — its seat's app "
+                                                   "stays";
+                                        return;
+                                    }
+                                }
+                                g_LiveSunshineUids.remove(uid);
+                                quitDeviceApp(
+                                    hostUuidCopy, uid,
+                                    [releaseSeatIfIdle, hostUuidCopy, uid](bool ok, QString why) {
+                                        if (!ok) qWarning() << "[main] Seat quit failed:" << why;
+                                        releaseSeatIfIdle(hostUuidCopy, uid);
+                                    });
+                            });
                     } else if (!siblingLive && !host->takesHostCancel()) {
                         // The native host is not a GameStream server: there is
                         // no /cancel to send, and its engine stopped with the
@@ -4220,7 +4295,8 @@ int main(int argc, char* argv[])
         [&computerManager, &g_ActiveRelay, &g_ActiveStreamRelay, &g_ActiveMediaTrackRelay,
          &g_ActiveSession, &g_ActiveClientUniqueId, &g_ActiveHostUuid, &g_Pool, &g_LiveSunshineUids,
          &dropPendingHostCancel, &detachWorkerSlot, &appOutlivesStream, &anyOtherSlotLive,
-         &endPlayerSessions](const HttpRequest& req, const ResponseCallback& respond) {
+         &endPlayerSessions, &quitsPerDevice, &quitDeviceApp,
+         &releaseSeatIfIdle](const HttpRequest& req, const ResponseCallback& respond) {
             QString uuid = req.pathParams.value("id");
             qInfo() << "[quit] ENTER — uuid=" << uuid << "relay=" << g_ActiveRelay.data()
                     << "relay valid=" << (!g_ActiveRelay.isNull());
@@ -4243,12 +4319,8 @@ int main(int argc, char* argv[])
             // Per-browser unique ID so the cancel targets this browser's own
             // session (must match the one used at /launch). Sanitized to hex.
             QJsonObject qbody = QJsonDocument::fromJson(req.body).object();
-            QString quitUniqueId;
-            for (const QChar& c : qbody["client_uniqueid"].toString()) {
-                QChar u = c.toUpper();
-                if (u.isDigit() || (u >= 'A' && u <= 'F')) quitUniqueId += u;
-                if (quitUniqueId.size() >= 32) break;
-            }
+            const QString quitUniqueId =
+                sanitizeClientUniqueId(qbody["client_uniqueid"].toString());
 
             // ── Worker-mode sessions ───────────────────────────────────────
             // session_slot present → tear down ONLY that slot's child (the
@@ -4319,6 +4391,24 @@ int main(int argc, char* argv[])
                 // Suppressed ended-cleanup: this handler owns the Sunshine
                 // /cancel decision (keyed by quitUniqueId below; none at all
                 // when retiring).
+                detachWorkerSlot(i, false);
+                workerStopped = true;
+            }
+            // A stream of this device on this host in a slot past the owner's
+            // two — an app slot (the virtual display beside Display 1, a second
+            // MultiSeat device) — is this device's too. session_slot is taken as
+            // sent here: the owner bound above would turn slot 5 into 1.
+            const int rawSlot =
+                qbody.contains("session_slot") ? qbody["session_slot"].toInt(-1) : -1;
+            for (int i = kOwnerSlots; i < g_Pool.size() && !quitUniqueId.isEmpty(); ++i) {
+                const SessionPool::Slot& sl = g_Pool.at(i);
+                if (!sl.worker || sl.hostUuid != host->uuid || sl.clientUniqueId != quitUniqueId)
+                    continue;
+                if (rawSlot >= 0 && rawSlot != i) continue;
+                if (!quitSessionToken.isEmpty() && !sl.sessionToken.isEmpty() &&
+                    quitSessionToken != sl.sessionToken)
+                    continue;
+                qInfo() << "[quit] Stopping stream worker slot" << i << "(app slot of this device)";
                 detachWorkerSlot(i, false);
                 workerStopped = true;
             }
@@ -4400,12 +4490,32 @@ int main(int argc, char* argv[])
                 // to a host that is encoding.
                 if (!anyOtherSlotLive(-1, host->uuid))
                     computerManager.refreshRunningApp(host->uuid);
+                // A seat whose game already ended goes back to the pool.
+                releaseSeatIfIdle(host->uuid, quitUniqueId);
                 respond(HttpResponse::json(QJsonObject{{"status", "quit"}}));
                 return;
             }
 
             // Sent here and now, so a /cancel still held for this browser is moot.
             dropPendingHostCancel(quitUniqueId, host->uuid);
+            if (quitsPerDevice(host->uuid)) {
+                // The device's own seat, under its certificate (see quitDeviceApp).
+                g_LiveSunshineUids.remove(quitUniqueId);
+                const QString hostUuid = host->uuid;
+                quitDeviceApp(
+                    hostUuid, quitUniqueId,
+                    [respond, releaseSeatIfIdle, hostUuid, quitUniqueId](bool ok, QString why) {
+                        if (!ok) {
+                            qWarning() << "[quit] Quitting the seat's app failed:" << why;
+                            respond(HttpResponse::error(502, "Quit failed: " + why));
+                            return;
+                        }
+                        qInfo() << "[quit] EXIT — the device's seat quit its app";
+                        releaseSeatIfIdle(hostUuid, quitUniqueId);
+                        respond(HttpResponse::json(QJsonObject{{"status", "quit"}}));
+                    });
+                return;
+            }
             if (!host->takesHostCancel()) {
                 // Stopping the worker above was the whole of it.
                 g_LiveSunshineUids.remove(quitUniqueId);
@@ -4459,13 +4569,19 @@ int main(int argc, char* argv[])
                 respond(HttpResponse::error(404, "Host not found"));
                 return;
             }
-            computerManager.refreshRunningApp(uuid, [respond](bool ok, int appId) {
-                if (!ok) {
-                    respond(HttpResponse::error(502, "The host did not say which app it runs"));
-                    return;
-                }
-                respond(HttpResponse::json(QJsonObject{{"currentGameId", appId}}));
-            });
+            // The device asking: where devices have seats of their own
+            // (MultiSeat), the running app is the one on its seat.
+            const QString device = sanitizeClientUniqueId(req.queryParams.value("client_uniqueid"));
+            computerManager.refreshRunningApp(
+                uuid,
+                [respond](bool ok, int appId) {
+                    if (!ok) {
+                        respond(HttpResponse::error(502, "The host did not say which app it runs"));
+                        return;
+                    }
+                    respond(HttpResponse::json(QJsonObject{{"currentGameId", appId}}));
+                },
+                device);
         });
 
     // POST /api/hosts/:id/stop-session — the escape hatch.
@@ -4478,11 +4594,50 @@ int main(int argc, char* argv[])
     // Sunshine session we know to be live, whoever started it.
     server.router()->postAsync(
         "/api/hosts/:id/stop-session",
-        [&computerManager, &g_Pool, &g_LiveSunshineUids, &detachWorkerSlot,
-         &endPlayerSessions](const HttpRequest& req, const ResponseCallback& respond) {
+        [&computerManager, &g_Pool, &g_LiveSunshineUids, &detachWorkerSlot, &endPlayerSessions,
+         &quitsPerDevice, &quitDeviceApp,
+         &releaseSeatIfIdle](const HttpRequest& req, const ResponseCallback& respond) {
             NvComputer* host = computerManager.getHost(req.pathParams.value("id"));
             if (!host) {
                 respond(HttpResponse::error(404, "Host not found"));
+                return;
+            }
+
+            // A host where each device has its own seat: "Quit" is the asking
+            // device's, on its seat. Its streams end, its seat's app is quit
+            // under the seat's certificate, and nothing of another device's —
+            // nor the machine's own GameStream server — is touched.
+            if (quitsPerDevice(host->uuid)) {
+                const QString uid = sanitizeClientUniqueId(
+                    QJsonDocument::fromJson(req.body).object()["client_uniqueid"].toString());
+                if (uid.isEmpty()) {
+                    respond(HttpResponse::error(
+                        400, "client_uniqueid is required: each device has its own seat here"));
+                    return;
+                }
+                qInfo() << "[stop-session] Quitting the app on this device's seat";
+                for (int i = 0; i < g_Pool.size(); ++i) {
+                    const SessionPool::Slot& sl = g_Pool.at(i);
+                    if (sl.worker && sl.hostUuid == host->uuid && sl.clientUniqueId == uid)
+                        detachWorkerSlot(i, false);
+                }
+                g_LiveSunshineUids.remove(uid);
+                const QString hostUuid = host->uuid;
+                quitDeviceApp(
+                    hostUuid, uid,
+                    [&computerManager, respond, releaseSeatIfIdle, hostUuid, uid](bool ok,
+                                                                                  QString why) {
+                        if (!ok) qWarning() << "[stop-session] Seat quit failed:" << why;
+                        computerManager.refreshRunningApp(
+                            hostUuid,
+                            [respond, releaseSeatIfIdle, hostUuid, uid](bool known, int appId) {
+                                QJsonObject out{{"status", QStringLiteral("stopped")}};
+                                if (known) out["currentGameId"] = appId;
+                                releaseSeatIfIdle(hostUuid, uid);
+                                respond(HttpResponse::json(out));
+                            },
+                            uid);
+                    });
                 return;
             }
 

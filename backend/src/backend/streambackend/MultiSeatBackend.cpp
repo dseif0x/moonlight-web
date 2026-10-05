@@ -540,6 +540,34 @@ void MultiSeatBackend::quit(const QString& seatId, const QString& clientUniqueId
         });
 }
 
+void MultiSeatBackend::runningAppForDevice(const QString& deviceId, BackendIntCallback cb)
+{
+    // Never claims a seat: asking which app runs is not a reason to hand the
+    // device an account. No seat, nothing of its own running.
+    const QString owned = ownedSeat(deviceId);
+    if (owned.isEmpty()) {
+        cb(true, BackendError{}, 0);
+        return;
+    }
+    withSeatBackend(owned, [owned, cb](GameStreamBackend* backend, const BackendError& err) {
+        if (!backend) {
+            cb(false, err, 0);
+            return;
+        }
+        backend->runningApp(owned, cb);
+    });
+}
+
+void MultiSeatBackend::releaseDevice(const QString& deviceId)
+{
+    const QString owned = ownedSeat(deviceId);
+    if (owned.isEmpty()) return;
+    Logger::info(QStringLiteral("MultiSeat: seat %1 is free again — %2 has neither a game nor a "
+                                "stream on it")
+                     .arg(owned, deviceId));
+    releaseOwnership(deviceId);
+}
+
 void MultiSeatBackend::provisionSeat(const QJsonObject& params, BackendSeatCallback cb)
 {
     NvComputer* host = m_ResolveHost ? m_ResolveHost() : nullptr;

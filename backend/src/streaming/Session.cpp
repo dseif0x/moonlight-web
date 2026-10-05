@@ -205,8 +205,10 @@ void StreamSession::start()
 void StreamSession::chooseByRunningApp(std::function<void()> orElse)
 {
     QPointer<StreamSession> self(this);
-    m_Backend->runningApp(
-        m_Host->uuid, [self, orElse](bool ok, const BackendError& err, int running) {
+    // Asked for this device: on MultiSeat the app that matters is the one on
+    // the device's own seat; everywhere else this is the host's running app.
+    m_Backend->runningAppForDevice(
+        m_ClientUniqueId, [self, orElse](bool ok, const BackendError& err, int running) {
             if (!self) return;
             if (!ok) {
                 qWarning() << "[Session] Host did not say which app runs (" << err.message

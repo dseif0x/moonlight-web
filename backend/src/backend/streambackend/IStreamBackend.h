@@ -119,6 +119,11 @@ struct BackendCapabilities
     // names it in serverinfo (`currentgame`). False where the app is not ours to
     // keep: Wolf reaps its sessions, the native host has displays, not apps.
     bool resumableApps = false;
+    // Which app runs is a per-device answer: each device has a seat of its own
+    // (MultiSeat), so the host-wide `currentgame` the poll reads means nothing,
+    // and the running app is asked per device (runningAppForDevice) — never
+    // stored on the host.
+    bool runningAppPerDevice = false;
 };
 
 // Why a call failed. Callers map this to HTTP; keeping the kind distinct from
@@ -224,6 +229,20 @@ public:
                               QStringLiteral("This backend does not report its running app")),
            0);
     }
+
+    // The app running for one device: on its own seat where devices have one
+    // (capabilities().runningAppPerDevice), otherwise the host's, as above. A
+    // device that has no seat runs nothing: 0, and no seat is claimed for it.
+    virtual void runningAppForDevice(const QString& deviceId, BackendIntCallback cb)
+    {
+        Q_UNUSED(deviceId);
+        runningApp(QString(), std::move(cb));
+    }
+
+    // Give back what this device holds on the host — its seat, where devices
+    // have one. Called once the device has neither a stream nor a running app;
+    // nothing to do elsewhere.
+    virtual void releaseDevice(const QString& deviceId) { Q_UNUSED(deviceId); }
 
     // Restart the streaming service this backend fronts, through its own
     // control API — never by asking the host for credentials. Only meaningful

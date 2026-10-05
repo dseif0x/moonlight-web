@@ -406,9 +406,11 @@ void GameStreamBackend::quit(const QString& seatId, const QString& clientUniqueI
     // session the default identity owns, which may belong to another player.
     const QString uniqueId = clientUniqueId.isEmpty() ? im->getUniqueId() : clientUniqueId;
 
-    QNetworkReply* reply =
-        m_Http->quitAppAsync(host->uniqueAddresses().first(), httpsPort, im->getCertificate(),
-                             im->getPrivateKey(), uniqueId);
+    // Under the certificate this host paired: a seat's Apollo refuses any other
+    // (empty m_IdentitySeat = the default identity, as for every plain host).
+    const ClientIdentity identity = im->identityForSeat(m_IdentitySeat);
+    QNetworkReply* reply = m_Http->quitAppAsync(host->uniqueAddresses().first(), httpsPort,
+                                                identity.certPem, identity.keyPem, uniqueId);
 
     auto answered = std::make_shared<bool>(false);
     auto answer = [answered, cb](bool ok, const BackendError& e) {
@@ -417,7 +419,8 @@ void GameStreamBackend::quit(const QString& seatId, const QString& clientUniqueI
         cb(ok, e);
     };
 
-    QTimer::singleShot(NvHTTP::REQUEST_TIMEOUT_MS + 2000, reply, [answer]() {
+    // The host answers /cancel only once the app is gone (NvHTTP::QUIT_TIMEOUT_MS).
+    QTimer::singleShot(NvHTTP::QUIT_TIMEOUT_MS + 2000, reply, [answer]() {
         answer(false,
                BackendError::make(BackendError::Timeout, QStringLiteral("Quit request timed out")));
     });
@@ -463,10 +466,12 @@ void GameStreamBackend::runningApp(const QString& seatId, BackendIntCallback cb)
     // another app was then refused with 400 and fell back to resuming the app
     // that DID run — the very "click B, get A" this check exists to stop
     // (issue #24 bench on Apollo 0.4.6, 05/10/2026).
-    auto* identity = IdentityManager::get();
-    QNetworkReply* reply =
-        m_Http->getServerInfoAsyncHttps(addr, identity->getUniqueId(), identity->getCertificate(),
-                                        identity->getPrivateKey(), host->activeHttpsPort);
+    // As the client this host knows: a MultiSeat seat was paired under its own
+    // certificate (m_IdentitySeat) and knows no other; empty = the default one.
+    IdentityManager* im = IdentityManager::get();
+    const ClientIdentity identity = im->identityForSeat(m_IdentitySeat);
+    QNetworkReply* reply = m_Http->getServerInfoAsyncHttps(
+        addr, im->getUniqueId(), identity.certPem, identity.keyPem, host->activeHttpsPort);
 
     auto answered = std::make_shared<bool>(false);
     auto answer = [answered, cb](bool ok, const BackendError& e, int appId) {

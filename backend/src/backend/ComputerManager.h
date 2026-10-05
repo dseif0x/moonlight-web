@@ -121,7 +121,8 @@ public:
     /// poll — which pauses while a stream runs. `cb` (optional) gets the id,
     /// or ok == false when the backend cannot tell or the host did not answer.
     void refreshRunningApp(const QString& uuid,
-                           std::function<void(bool ok, int appId)> cb = nullptr);
+                           std::function<void(bool ok, int appId)> cb = nullptr,
+                           const QString& deviceId = QString());
 
     /// What the host's backend can do, as the frontend consumes it: {multiUser,
     /// provisioning, lobbies}. Read off a real provider instance so it cannot

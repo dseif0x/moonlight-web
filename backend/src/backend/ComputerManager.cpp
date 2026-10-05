@@ -219,11 +219,29 @@ std::unique_ptr<IStreamBackend> ComputerManager::backendForHost(const QString& u
     return StreamBackendRegistry::instance().create(type, config);
 }
 
-void ComputerManager::refreshRunningApp(const QString& uuid, std::function<void(bool, int)> cb)
+void ComputerManager::refreshRunningApp(const QString& uuid, std::function<void(bool, int)> cb,
+                                        const QString& deviceId)
 {
     std::shared_ptr<IStreamBackend> backend(backendForHost(uuid).release());
     if (!backend || !backend->capabilities().resumableApps) {
         if (cb) cb(false, 0);
+        return;
+    }
+    // A per-device answer (MultiSeat: the device's own seat) is the device's,
+    // not the host's: it is handed back, never stored on the host, whose
+    // currentGameId every other device would then read as its own.
+    if (backend->capabilities().runningAppPerDevice) {
+        if (deviceId.isEmpty()) {
+            if (cb) cb(false, 0);
+            return;
+        }
+        backend->runningAppForDevice(deviceId, [backend, uuid, cb](bool ok, const BackendError& err,
+                                                                   int appId) {
+            if (!ok)
+                Logger::warning(
+                    QString("Running app of %1 for a device unknown: %2").arg(uuid, err.message));
+            if (cb) cb(ok, ok ? appId : 0);
+        });
         return;
     }
     // The lambda keeps `backend` alive until the answer comes back: its reply
@@ -1012,8 +1030,12 @@ QJsonArray ComputerManager::getHostsJson() const
         // Moonlight's model — Stop leaves the app running, the card offers to
         // resume or quit it — applies only where the backend says the app is
         // ours to keep. Read off a provider instance, like the capabilities.
-        if (std::unique_ptr<IStreamBackend> backend = backendForHost(it.key()))
+        if (std::unique_ptr<IStreamBackend> backend = backendForHost(it.key())) {
             obj["resumableApps"] = backend->capabilities().resumableApps;
+            // Its running app is the device's to ask for (GET running-app with
+            // client_uniqueid): the host's currentGameId says nothing about it.
+            obj["runningAppPerDevice"] = backend->capabilities().runningAppPerDevice;
+        }
         obj["restartSupported"] = it.value()->isLocalMachine()
                                       ? localSunshinePresent()
                                       : caps.value("restartService").toBool();
