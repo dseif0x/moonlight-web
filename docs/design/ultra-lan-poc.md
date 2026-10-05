@@ -1047,6 +1047,17 @@ Le fonctionnement :
   U1.4, pour les trois codecs et pour Ultra ;
 - SCTP reste le défaut tant que Bruno n'a pas basculé les cases.
 
+**À corriger avant de passer la route audio au produit hors Windows**
+(constat de la session audio + DSCP, 05/10). libdatachannel marque chaque
+paquet d'une piste « audio » en EF, DSCP 46 (`track.cpp:215-220`), et les
+autres pistes en AF42. Sur un hôte Linux ou macOS, toute la vidéo de la route
+audio partirait donc en EF. Un point d'accès qui suit la RFC 8325 la range dans
+la file voix du Wi-Fi, qui n'agrège pas les trames : son débit s'effondre, et
+la vraie voix de la maison en pâtit. Sous Windows, libjuice ne marque rien, et
+les bancs sur DualRTX ne sont pas touchés. Il faut que la route audio porte une
+marque vidéo (AF4x) et que seul le vrai son garde EF. Le plan DSCP choisira les
+marques.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
