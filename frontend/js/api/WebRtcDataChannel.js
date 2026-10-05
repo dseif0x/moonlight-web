@@ -770,12 +770,21 @@ export class WebRtcDataChannel {
      * until then the frames from the latest keyframe on are held.
      */
     _onRtpVideoFrame(frame, isKeyframe, backendTs, lost = false) {
-        // A frame went missing before this one (the audio road has no
-        // retransmission): deltas wait for the keyframe asked for.
+        // A keyframe closes the request, as on the DataChannel path.
+        if (isKeyframe) {
+            this._idrOutstanding = false;
+            this._idrBackoffMs = this.IDR_THROTTLE_MS;
+        }
+        // A frame went missing before this one (the audio road gave up on its
+        // chunks): deltas wait for the keyframe asked for. These frames carry
+        // no host frame number, so nothing names the loss to a host that heals
+        // by invalidation, and no refresh wave is told of it either: the
+        // keyframe is the only repair, whatever the host's mode (the N95 froze
+        // at 0 i/s behind a suppressed request, 05/10/2026).
         if (lost && !isKeyframe) this._rtpBroken = true;
         if (this._rtpBroken) {
             if (!isKeyframe) {
-                this._requestIdrFrame('RTP frame lost');
+                this._requestIdrFrame('RTP frame lost', true);
                 return;
             }
             this._rtpBroken = false;
@@ -1616,12 +1625,13 @@ export class WebRtcDataChannel {
      *  Client-side throttle with exponential backoff: at most one request per adaptive
      *  interval (500ms base, doubling to 4s while no keyframe arrives); backend also
      *  throttles server-side. */
-    _requestIdrFrame(reason) {
+    _requestIdrFrame(reason, force = false) {
         const now = performance.now();
 
         // The host heals what it is told it lost: StreamView tells it. Nothing
         // this transport could ask for on its own would help — see the flag.
-        if (this.healsByInvalidation) {
+        // `force`: a loss nobody can name (the RTP road's), the keyframe or nothing.
+        if (this.healsByInvalidation && !force) {
             this._idrSuppressed++;
             if (this._idrSuppressed <= 3 || this._idrSuppressed % 50 === 0) {
                 console.log(
@@ -1645,7 +1655,7 @@ export class WebRtcDataChannel {
         // job and we fall back to exactly today's recovery. "One cycle" is
         // counted in frames received when the host said how long its wave is,
         // on the clock otherwise — see rideOutFrames.
-        if (this.rideOutLoss && !this._rideOutFailed) {
+        if (this.rideOutLoss && !this._rideOutFailed && !force) {
             if (!this._rideOutSince) {
                 this._rideOutSince = now;
                 this._rideOutFramesSeen = 0;
