@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>PyroWave decoder lab</title>
+  </head>
+  <body>
+    <pre id="log"></pre>
+    <script type="module">
+      // The browser PyroWave decoder against the reference one (POC Ultra, U3.4).
+      // Served by serve_lab.py; driven by decoder_lab.py over CDP.
+      //   ?clip=text-1080p&mbps=170&ref=0x10de&frames=60&timing=200
+      // Decodes the oracle's stream (<clip>-<mbps>-<ref>.pwv), compares every frame
+      // with the oracle's own decode (max code difference, PSNR) and with the source
+      // clip, then times the GPU decode of one frame `timing` times. The result is
+      // left in window.__labResult.
+      import { PyroWaveDecoder } from "/frontend/js/stream/ultra/PyroWaveDecoder.js";
+
+      const q = new URLSearchParams(location.search);
+      const clip = q.get("clip") || "text-1080p";
+      const mbps = q.get("mbps") || "170";
+      const ref = q.get("ref") || "0x10de";
+      const maxFrames = Number(q.get("frames") || 60);
+      const timing = Number(q.get("timing") || 200);
+      const out = document.getElementById("log");
+      const log = (s) => {
+        out.textContent += s + "\n";
+      };
+
+      async function bytes(url) {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`${url}: ${r.status}`);
+        return new Uint8Array(await r.arrayBuffer());
+      }
+
+      // Y4M 8-bit 4:2:0 frames, as views into the file.
+      function y4mFrames(buf, w, h) {
+        const frames = [];
+        let pos = buf.indexOf(10) + 1;
+        const size = (w * h * 3) / 2;
+        while (pos < buf.length) {
+          pos = buf.indexOf(10, pos) + 1; // "FRAME\n"
+          frames.push(buf.subarray(pos, pos + size));
+          pos += size;
+        }
+        return frames;
+      }
+
+      function compare(a, b, ySize) {
+        let maxDiff = 0;
+        let se = 0;
+        for (let i = 0; i < ySize; i++) {
+          const d = a[i] - b[i];
+          if (d > maxDiff) maxDiff = d;
+          else if (-d > maxDiff) maxDiff = -d;
+          se += d * d;
+        }
+        let maxDiffC = 0;
+        for (let i = ySize; i < a.length; i++) {
+          const d = Math.abs(a[i] - b[i]);
+          if (d > maxDiffC) maxDiffC = d;
+        }
+        const psnr = se === 0 ? 99 : 10 * Math.log10((255 * 255 * ySize) / se);
+        return { maxDiff, maxDiffC, psnr };
+      }
+
+      const pct = (arr, p) => {
+        const s = [...arr].sort((x, y) => x - y);
+        return s[Math.min(s.length - 1, Math.floor(p * s.length))];
+      };
+
+      async function run() {
+        const adapter = await navigator.gpu.requestAdapter({
+          powerPreference: "high-performance",
+        });
+        const info = adapter.info || {};
+        const hasTs = adapter.features.has("timestamp-query");
+        const device = await adapter.requestDevice({
+          requiredFeatures: hasTs ? ["timestamp-query"] : [],
+          requiredLimits: {
+            maxStorageBufferBindingSize:
+              adapter.limits.maxStorageBufferBindingSize,
+            maxBufferSize: adapter.limits.maxBufferSize,
+          },
+        });
+        const errors = [];
+        device.onuncapturederror = (e) => errors.push(e.error.message);
+        log(
+          `adapter: ${info.vendor} ${info.architecture} ${info.description || ""} ts=${hasTs}`,
+        );
+
+        const pwv = await bytes(`/corpus/${clip}-${mbps}-${ref}.pwv`);
+        const dv = new DataView(pwv.buffer);
+        const w = dv.getUint32(4, true);
+        const h = dv.getUint32(8, true);
+        const nFrames = Math.min(dv.getUint32(20, true), maxFrames);
+        const oracle = y4mFrames(
+          await bytes(`/corpus/${clip}-${mbps}-${ref}-dec.y4m`),
+          w,
+          h,
+        );
+        const source = y4mFrames(await bytes(`/corpus/${clip}.y4m`), w, h);
+
+        // Frames as packet lists.
+        const frames = [];
+        let pos = 24;
+        for (let f = 0; f < nFrames; f++) {
+          const n = dv.getUint32(pos, true);
+          pos += 4;
+          const packets = [];
+          for (let k = 0; k < n; k++) {
+            const size = dv.getUint32(pos, true);
+            packets.push(pwv.subarray(pos + 4, pos + 4 + size));
+            pos += 4 + size;
+          }
+          frames.push(packets);
+        }
+
+        const dec = new PyroWaveDecoder(device, w, h);
+        const packedSize = (w * h * 3) / 2;
+        const readback = device.createBuffer({
+          size: dec.packedBuf.size,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
+
+        const perFrame = [];
+        for (let f = 0; f < frames.length; f++) {
+          for (const p of frames[f]) {
+            if (!dec.pushPacket(p))
+              throw new Error(`frame ${f}: malformed packet`);
+          }
+          const ready = dec.isReady();
+          const enc = device.createCommandEncoder();
+          dec.decode(enc);
+          enc.copyBufferToBuffer(
+            dec.packedBuf,
+            0,
+            readback,
+            0,
+            dec.packedBuf.size,
+          );
+          device.queue.submit([enc.finish()]);
+          await readback.mapAsync(GPUMapMode.READ);
+          const got = new Uint8Array(readback.getMappedRange()).slice(
+            0,
+            packedSize,
+          );
+          readback.unmap();
+          const vsOracle = compare(got, oracle[f], w * h);
+          const vsSource = compare(got, source[f], w * h);
+          perFrame.push({
+            frame: f,
+            ready,
+            maxDiff: vsOracle.maxDiff,
+            maxDiffC: vsOracle.maxDiffC,
+            psnrVsOracle: vsOracle.psnr,
+            psnrVsSource: vsSource.psnr,
+          });
+        }
+
+        // GPU time of the decode, the same frame again and again.
+        let gpuMs = [];
+        let badTimestamps = 0;
+        if (hasTs && timing > 0) {
+          const qs = device.createQuerySet({ type: "timestamp", count: 2 });
+          const resolve = device.createBuffer({
+            size: 16,
+            usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+          });
+          const tsRead = device.createBuffer({
+            size: 16,
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+          });
+          for (let i = 0; i < timing; i++) {
+            dec.decodedThisSeq = false;
+            const enc = device.createCommandEncoder();
+            dec.decode(enc, {
+              querySet: qs,
+              beginningOfPassWriteIndex: 0,
+              endOfPassWriteIndex: 1,
+            });
+            enc.resolveQuerySet(qs, 0, 2, resolve, 0);
+            enc.copyBufferToBuffer(resolve, 0, tsRead, 0, 16);
+            device.queue.submit([enc.finish()]);
+            await tsRead.mapAsync(GPUMapMode.READ);
+            const t = new BigUint64Array(tsRead.getMappedRange());
+            // The Arc sometimes returns an end before its start (a wrapped
+            // value): such a pair is dropped and counted.
+            const ms = Number(BigInt.asIntN(64, t[1] - t[0])) / 1e6;
+            if (ms > 0 && ms < 1000) gpuMs.push(ms);
+            else badTimestamps++;
+            tsRead.unmap();
+          }
+        }
+
+        const res = {
+          clip,
+          mbps,
+          ref,
+          width: w,
+          height: h,
+          frames: perFrame.length,
+          adapter:
+            `${info.vendor} ${info.architecture} ${info.description || ""}`.trim(),
+          maxDiff: Math.max(...perFrame.map((x) => x.maxDiff)),
+          maxDiffC: Math.max(...perFrame.map((x) => x.maxDiffC)),
+          minPsnrVsOracle: Math.min(...perFrame.map((x) => x.psnrVsOracle)),
+          meanPsnrVsSource:
+            perFrame.reduce((a, x) => a + x.psnrVsSource, 0) / perFrame.length,
+          allReady: perFrame.every((x) => x.ready),
+          gpuMs: gpuMs.length
+            ? {
+                p50: pct(gpuMs, 0.5),
+                p99: pct(gpuMs, 0.99),
+                min: Math.min(...gpuMs),
+                dropped: badTimestamps,
+              }
+            : null,
+          errors,
+          perFrame,
+        };
+        log(JSON.stringify({ ...res, perFrame: undefined }));
+        return res;
+      }
+
+      window.__labResult = run().catch((e) => ({
+        error: String((e && e.stack) || e),
+      }));
+      window.__labResult.then((r) => {
+        window.__labDone = r;
+      });
+    </script>
+  </body>
+</html>
