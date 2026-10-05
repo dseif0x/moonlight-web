@@ -946,6 +946,65 @@ Found by the audio + DSCP planning session. No bench.
   Ultra packets of the audio road should carry a video mark (AF4x), and only
   the real audio track EF. The DSCP plan decides the marks.
 
+### 05/10/2026 — W4: SCTP, the RTP video track and the audio road to a client in Wi-Fi (N95)
+
+Wi-Fi plan, W4. The first measurement of the three video roads against a
+client in Wi-Fi.
+- **Setup.**
+  - Host: DualRTX `--dev`, Windows native, Arc A380 encoder, build `build\` of
+    18:56.
+  - Page: served from the repo with `74ec6f9f` in it.
+  - Client: N95 in Wi-Fi, Chrome 154, page at 58-59 Hz.
+  - Arms: `MW_RTP_VIDEO` empty (SCTP, B and `sctpburst=0` the defaults),
+    `native:h264+hevc` (RTP video track), `native:h264+hevc+aroad` (audio
+    road). Each in H.264 and HEVC, two rounds, 20:15-21:52.
+  - Measured: the click → flag, and each frame's age (host stamp → drawn,
+    `e2e`).
+- **The "loaded" arm did not load.** A fixed `--bitrate 30000` caps the rate
+  but does not raise it: the scroll page at 59 fps asked for 1.2-2.3 Mbit/s
+  in H.264 and 4-22 in HEVC. The four passes of each arm below are therefore
+  read together, as four light-link passes. A real load needs heavier content.
+- **One pass was hit and redone.** `sctp-h264-idle-r1` met 7 TDRs of the RTX
+  (20:27:53-20:28:52, another session's encoder trial); it was redone as
+  `r1b`. The Arc encoder was not touched.
+- **H.264, medians of four passes:**
+
+  | Road | Click → flag | Frame age (`e2e`) |
+  |---|---|---|
+  | Audio road | ~68 ms (61-74) | ~20 ms |
+  | SCTP | ~72 ms (68-77) | ~21 ms |
+  | RTP video track | ~78 ms (67-83) | ~28 ms |
+
+  - The RTP video track's ~7 ms is Chrome's receive metronome (U1.4 ter),
+    seen here in Wi-Fi too.
+  - The audio road is level with SCTP on a light link, a little ahead at the
+    click.
+  - All three draw 46-51 frames a second, with 55-58 clicks of 60 measured.
+- **HEVC (the N95 decodes it 20-40 ms slower than H.264, on every road):**
+  - **SCTP keeps its Wi-Fi tail.** Frame age median 25-48 ms but mean 34-71
+    and p90 65-172. Retransmissions 0.15-1.3 %, the wait in usrsctp's window
+    up to 3.6 s a pass. Click ~104 ms.
+  - **The RTP video track has no tail.** Age median 35-41, p90 60-96. But the
+    click is slowest, ~123 ms (one of four passes had no valid click).
+  - **The audio road breaks.** Only ~7 frames a second are drawn and 10-19
+    clicks of 60 measured, though the frames it does draw are young (median
+    22-31 ms, p90 37-63). Each lost chunk the NACK cannot save makes the page
+    give the frame up and ask for a keyframe. Since `74ec6f9f` this holds even
+    on a host that heals by invalidation, because the audio road's frames do
+    not carry the host's frame number. An HEVC keyframe is many Opus packets,
+    and on this link one of them is lost again. The H.264 frames, a few
+    packets each, get through.
+- **What it means for the product (to confirm on the Mac):**
+  - On a light Wi-Fi link, the RTP video track costs the metronome's ~7 ms for
+    nothing.
+  - The audio road equals SCTP in H.264.
+  - In HEVC, the audio road is not usable until a lost frame is healed by
+    deltas: its header must carry the host's frame number, as planned by the
+    POC session.
+  - SCTP's advantage is only that nothing is ever lost. Its cost is the tail.
+- **Open:** a real load (heavier content or another station), and the Mac,
+  where SCTP's tail was the worst (W0-W2).
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
