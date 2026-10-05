@@ -55,8 +55,9 @@ Windows client, with no camera and no microphone.
   It clicks (SendInput), hears its own output through WASAPI loopback (each
   packet carries the QPC time of its first sample) and watches one pixel of the
   composed desktop for the host's flag: `--flag X,Y` names a point of its left,
-  pure blue band, or `--window TITLE` finds the stream's window and takes 46 %
-  across, 2.5 % down (the flag's blue band when the stream fills the window).
+  pure blue band, or `--window TITLE` finds the stream's window and looks for
+  the flag in it by its colours (a run of pure blue, then white, then red),
+  wherever the page puts the stream (tabs, toolbars, letterboxing).
   Blue, not a change of brightness: a bench page scrolling under the flag is
   never that blue. Per click: click → sound, click → flag, sound − flag (the
   lip-sync offset). `--tick SECS` sends no click and pairs each beep it hears
@@ -68,6 +69,13 @@ Windows client, with no camera and no microphone.
   clicks and the user's audio are.
 - The loopback hears the stream with the output muted: the bench needs no
   audible sound (checked on DualRTX, 05/10/2026).
+- `--wav FILE` keeps everything the client played (mono, 16-bit, silences
+  filled on the QPC clock; `wav starts at <µs>` is printed), to see what became
+  of a beep the threshold did not catch.
+- On the N95 in loaded Wi-Fi (05/10/2026), 17 beeps of 60 were heard, at full
+  level when heard, while NetEq held 380 ms: a pure tone may be what its time
+  stretching shortens when it catches up. `MW_LATENCY_BEEP=noise` on the host
+  plays white noise instead, to compare.
 - **Counted**: the click's send to this machine's mixer (the loopback tap): the
   way up, the host's input, its beep through its mixer and loopback capture,
   the pacer, Opus, the relay, the network, the browser's jitter buffer and

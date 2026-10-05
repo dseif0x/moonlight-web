@@ -19,9 +19,11 @@
 
 #include <QByteArray>
 #include <QDebug>
+#include <QString>
 #include <QtGlobal>
 
 #include <chrono>
+#include <cstdint>
 
 namespace {
 
@@ -73,6 +75,10 @@ std::atomic<bool> g_Ready{false};
 std::atomic<int> g_Pending{0};
 std::atomic<long long> g_AskedUs{0};
 std::atomic<int> g_FramesPerBeep{0};
+// MW_LATENCY_BEEP=noise: white noise instead of the tone. A pure tone is the
+// most periodic signal there is, the one NetEq's time stretching shortens best
+// when it catches up on a grown buffer; noise gives it nothing to cut.
+bool g_Noise = false;
 
 void outputThread()
 {
@@ -121,11 +127,15 @@ void outputThread()
         const int channels = fmt->nChannels;
         const double rate = fmt->nSamplesPerSec;
         g_FramesPerBeep = static_cast<int>(rate * kToneMs / 1000.0);
-        qInfo() << "[LatencyBeep] armed:" << kToneMs << "ms of" << kToneHz << "Hz on the default"
+        g_Noise = qgetenv("MW_LATENCY_BEEP").trimmed().toLower() == "noise";
+        qInfo() << "[LatencyBeep] armed:" << kToneMs << "ms of"
+                << (g_Noise ? QStringLiteral("white noise") : QString::number(kToneHz) + " Hz")
+                << "on the default"
                 << "output," << static_cast<int>(rate) << "Hz," << channels << "channels, buffer"
                 << bufferFrames << "frames";
         g_Ready = true;
         double phase = 0;
+        uint32_t noise = 0x12345678u;
         const double step = 2.0 * 3.14159265358979323846 * kToneHz / rate;
         while (g_Run) {
             WaitForSingleObject(event, 100);
@@ -141,7 +151,12 @@ void outputThread()
             for (UINT32 i = 0; i < avail; ++i) {
                 float v = 0.0f;
                 if (pending > 0) {
-                    v = kAmplitude * static_cast<float>(std::sin(phase));
+                    if (g_Noise) {
+                        noise = noise * 1664525u + 1013904223u;
+                        v = kAmplitude * (static_cast<float>(noise >> 8) / 8388608.0f - 1.0f);
+                    } else {
+                        v = kAmplitude * static_cast<float>(std::sin(phase));
+                    }
                     phase += step;
                     --pending;
                 } else {

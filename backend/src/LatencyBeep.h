@@ -33,6 +33,10 @@
  *   - `tick`: no click needed — beep and flag together every 500 ms, for the
  *     offset alone (the client pairs each beep with its flag).
  *
+ * MW_LATENCY_BEEP=noise plays white noise instead of the tone: a pure tone is
+ * what NetEq's time stretching shortens best when it catches up on a grown
+ * buffer, noise gives it nothing to cut.
+ *
  * The output stream is opened once, when the flag starts, and kept running on
  * silence: opening one per beep would add its own start-up to every figure.
  * Each beep is logged twice on the steady clock the relay stamps with — when

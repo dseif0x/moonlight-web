@@ -99,6 +99,32 @@ std::atomic<int> g_SoundReady{0}; // 1 capturing, -1 failed
 // The loudest sample heard, x1000: how far a missed beep stayed under the threshold.
 std::atomic<int> g_MaxPeakMilli{0};
 constexpr int64_t kRefractoryUs = 150'000;
+// --wav FILE: everything the client played, mono 16-bit, gaps filled with
+// silence on the QPC clock, for a look at what became of a missed beep.
+std::string g_WavPath;
+// --window: the stream's window, where the flag is looked for by its colours.
+HWND g_FlagWindow = nullptr;
+
+void writeWavHeader(std::FILE* f, int rate, uint32_t samples)
+{
+    const uint32_t bytes = samples * 2;
+    const uint32_t riff = 36 + bytes;
+    const uint16_t pcm = 1, mono = 1, align = 2, bitsPer = 16;
+    const uint32_t r = static_cast<uint32_t>(rate), byteRate = r * 2, fmtLen = 16;
+    std::fseek(f, 0, SEEK_SET);
+    std::fwrite("RIFF", 1, 4, f);
+    std::fwrite(&riff, 4, 1, f);
+    std::fwrite("WAVEfmt ", 1, 8, f);
+    std::fwrite(&fmtLen, 4, 1, f);
+    std::fwrite(&pcm, 2, 1, f);
+    std::fwrite(&mono, 2, 1, f);
+    std::fwrite(&r, 4, 1, f);
+    std::fwrite(&byteRate, 4, 1, f);
+    std::fwrite(&align, 2, 1, f);
+    std::fwrite(&bitsPer, 2, 1, f);
+    std::fwrite("data", 1, 4, f);
+    std::fwrite(&bytes, 4, 1, f);
+}
 
 // WASAPI loopback of the default output. Polls every millisecond: loopback
 // streams have no event of their own on every Windows.
@@ -143,6 +169,10 @@ void soundThread(float threshold)
                  channels, isFloat ? "float" : "pcm", bits);
     g_SoundReady = 1;
     int64_t lastOnset = 0;
+    std::FILE* wav = g_WavPath.empty() ? nullptr : std::fopen(g_WavPath.c_str(), "wb");
+    uint32_t wavSamples = 0;
+    int64_t wavNextUs = -1;
+    if (wav) writeWavHeader(wav, static_cast<int>(rate), 0);
     while (g_Run) {
         UINT32 next = 0;
         if (FAILED(capture->GetNextPacketSize(&next))) break;
@@ -178,9 +208,42 @@ void soundThread(float threshold)
                 }
             }
         }
+        if (wav) {
+            if (wavNextUs < 0) {
+                std::printf("wav starts at %lld"
+                            "\n",
+                            static_cast<long long>(firstUs));
+            } else if (firstUs > wavNextUs + 1000) {
+                // Nothing played meanwhile: the loopback sends no packet.
+                const int64_t gap =
+                    std::min<int64_t>((firstUs - wavNextUs) * rate / 1e6, 10 * rate);
+                const int16_t zero = 0;
+                for (int64_t k = 0; k < gap; ++k)
+                    std::fwrite(&zero, 2, 1, wav);
+                wavSamples += static_cast<uint32_t>(gap);
+            }
+            for (UINT32 i = 0; i < frames; ++i) {
+                float sum = 0;
+                if (!silent && data)
+                    for (int c = 0; c < channels; ++c)
+                        sum += isFloat && bits == 32
+                                   ? reinterpret_cast<const float*>(data)[i * channels + c]
+                                   : reinterpret_cast<const int16_t*>(data)[i * channels + c] /
+                                         32768.0f;
+                const float v = std::max(-1.0f, std::min(1.0f, sum / channels));
+                const int16_t sample = static_cast<int16_t>(v * 32767);
+                std::fwrite(&sample, 2, 1, wav);
+            }
+            wavSamples += frames;
+            wavNextUs = firstUs + static_cast<int64_t>(frames * 1e6 / rate);
+        }
         capture->ReleaseBuffer(frames);
     }
     client->Stop();
+    if (wav) {
+        writeWavHeader(wav, static_cast<int>(rate), wavSamples);
+        std::fclose(wav);
+    }
     capture->Release();
     client->Release();
     device->Release();
@@ -193,8 +256,73 @@ void soundThread(float threshold)
 // pure blue band, and an onset is that pixel turning clearly blue. A bench page
 // that scrolls under the flag changes brightness all the time; it is never
 // that blue.
+// The flag in the window, by its colours: a run of pure blue, then white, then
+// red (LatencyFlag's tricolour), in the top half of the client area. Its blue
+// band's middle is where flagThread then reads.
+bool findFlag(HWND hwnd, int& x, int& y)
+{
+    RECT r;
+    if (!GetClientRect(hwnd, &r)) return false;
+    POINT tl = {r.left, r.top};
+    ClientToScreen(hwnd, &tl);
+    const int w = r.right - r.left, h = (r.bottom - r.top) / 2;
+    if (w <= 0 || h <= 0) return false;
+    HDC screen = GetDC(nullptr);
+    HDC mem = CreateCompatibleDC(screen);
+    BITMAPINFO bi = {};
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h; // top-down
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    void* bits = nullptr;
+    HBITMAP bmp = CreateDIBSection(mem, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    BitBlt(mem, 0, 0, w, h, screen, tl.x, tl.y, SRCCOPY);
+    bool found = false;
+    const auto* px = static_cast<const uint8_t*>(bits); // B, G, R, X
+    auto at = [&](int cx, int cy) { return px + (static_cast<size_t>(cy) * w + cx) * 4; };
+    auto isBlue = [&](const uint8_t* p) { return p[0] > 180 && p[1] < 70 && p[2] < 70; };
+    auto isWhite = [&](const uint8_t* p) { return p[0] > 200 && p[1] > 200 && p[2] > 200; };
+    auto isRed = [&](const uint8_t* p) { return p[2] > 180 && p[1] < 70 && p[0] < 70; };
+    for (int cy = 0; cy < h && !found; cy += 2) {
+        int run = 0;
+        for (int cx = 0; cx < w && !found; ++cx) {
+            if (isBlue(at(cx, cy))) {
+                ++run;
+                continue;
+            }
+            if (run >= 8 && isWhite(at(cx + 1 < w ? cx + 1 : cx, cy))) {
+                const int band = run;
+                const int redX = cx + band + band / 2;
+                if (redX < w && isRed(at(redX, cy))) {
+                    x = tl.x + cx - band / 2;
+                    y = tl.y + cy;
+                    found = true;
+                }
+            }
+            run = 0;
+        }
+    }
+    SelectObject(mem, old);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(nullptr, screen);
+    return found;
+}
+
 void flagThread(int x, int y)
 {
+    // --window: no point yet; look for the flag until a click raises it.
+    while (x < 0 && g_Run && g_FlagWindow) {
+        if (findFlag(g_FlagWindow, x, y)) {
+            std::fprintf(stderr, "the flag found in the window, its blue band read at %d,%d\n", x,
+                         y);
+            break;
+        }
+        Sleep(20);
+    }
+    if (x < 0) return;
     HDC dc = GetDC(nullptr);
     int64_t lastOnset = 0;
     bool up = false;
@@ -247,10 +375,11 @@ bool flagPointInWindow(const std::string& title, int& x, int& y)
     POINT tl = {r.left, r.top}, br = {r.right, r.bottom};
     ClientToScreen(f.found, &tl);
     ClientToScreen(f.found, &br);
-    x = tl.x + static_cast<int>((br.x - tl.x) * 0.46);
-    y = tl.y + static_cast<int>((br.y - tl.y) * 0.025);
-    std::fprintf(stderr, "window client %ld,%ld-%ld,%ld: the flag's blue band read at %d,%d\n",
-                 tl.x, tl.y, br.x, br.y, x, y);
+    (void)x;
+    (void)y;
+    g_FlagWindow = f.found;
+    std::fprintf(stderr, "window client %ld,%ld-%ld,%ld: the flag is looked for in it\n", tl.x,
+                 tl.y, br.x, br.y);
     return true;
 }
 
@@ -308,6 +437,8 @@ int main(int argc, char** argv)
             out = val();
         else if (a == "--window")
             window = val();
+        else if (a == "--wav")
+            g_WavPath = val();
         else if (a == "--flag") {
             const std::string v = val();
             if (std::sscanf(v.c_str(), "%d,%d", &flagX, &flagY) != 2) flagX = flagY = -1;
@@ -333,13 +464,13 @@ int main(int argc, char** argv)
             std::fprintf(stderr, "no visible window titled *%s*\n", window.c_str());
             return 1;
         }
-        Sleep(3000);
-        flagPointInWindow(window, flagX, flagY);
+        flagX = flagY = -1; // found by its colours (flagThread)
     }
 
     std::thread sound(soundThread, threshold);
     std::thread flag;
-    if (flagX >= 0) flag = std::thread(flagThread, flagX, flagY);
+    const bool watchFlag = flagX >= 0 || g_FlagWindow != nullptr;
+    if (watchFlag) flag = std::thread(flagThread, flagX, flagY);
     while (g_SoundReady == 0)
         Sleep(5);
     if (g_SoundReady < 0) {
@@ -383,10 +514,10 @@ int main(int argc, char** argv)
             click();
             const int64_t deadline = t0 + timeoutMs * 1000LL;
             int64_t ts = -1, tf = -1;
-            while (qpcUs() < deadline && (ts < 0 || (flagX >= 0 && tf < 0))) {
+            while (qpcUs() < deadline && (ts < 0 || (watchFlag && tf < 0))) {
                 Sleep(1);
                 if (ts < 0) ts = g_Sound.firstAfter(t0);
-                if (flagX >= 0 && tf < 0) tf = g_Flag.firstAfter(t0);
+                if (watchFlag && tf < 0) tf = g_Flag.firstAfter(t0);
             }
             const double s = ts >= 0 ? (ts - t0) / 1000.0 : -1;
             const double fl = tf >= 0 ? (tf - t0) / 1000.0 : -1;
@@ -394,7 +525,7 @@ int main(int argc, char** argv)
                 soundMs.push_back(s);
             else
                 ++soundMiss;
-            if (flagX >= 0) {
+            if (watchFlag) {
                 if (fl >= 0)
                     flagMs.push_back(fl);
                 else
@@ -418,7 +549,7 @@ int main(int argc, char** argv)
 
     std::printf("click -> sound  median %.1f  p90 %.1f ms  (%zu, %d missed)\n",
                 quantile(soundMs, 0.5), quantile(soundMs, 0.9), soundMs.size(), soundMiss);
-    if (flagX >= 0)
+    if (watchFlag)
         std::printf("click -> flag   median %.1f  p90 %.1f ms  (%zu, %d missed)\n",
                     quantile(flagMs, 0.5), quantile(flagMs, 0.9), flagMs.size(), flagMiss);
     if (!avMs.empty())
