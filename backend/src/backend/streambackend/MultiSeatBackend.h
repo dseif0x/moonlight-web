@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include "../MultiSeatApiClient.h"
 #include "../NvComputer.h"
 #include "IStreamBackend.h"
@@ -139,6 +141,11 @@ private:
     NvComputer* seatHost(const MultiSeatSeat& seat, const QString& address);
 
     void pairSeat(const MultiSeatSeat& seat, const QString& address, BackendVoidCallback cb);
+    /// What the seat's Apollo says it is (appversion, GfeVersion, codecs), read
+    /// once into its synthetic host before the first stream: moonlight-common-c
+    /// refuses a connection whose server version it cannot parse.
+    void fillSeatVersion(const MultiSeatSeat& seat, const QString& address,
+                         std::function<void()> done);
 
     QString seatPairingKey(const QString& seatId, const char* field) const;
 
