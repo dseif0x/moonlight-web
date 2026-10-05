@@ -257,6 +257,7 @@ add_executable(mw-server
     src/Autostart.cpp
     src/DisplaySleep.cpp
     src/LatencyFlag.cpp
+    src/LatencyBeep.cpp
     src/backend/NvHTTP.cpp
     src/backend/NvComputer.cpp
     src/backend/ComputerManager.cpp

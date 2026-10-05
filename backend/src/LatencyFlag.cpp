@@ -16,6 +16,7 @@
  */
 
 #include "LatencyFlag.h"
+#include "LatencyBeep.h"
 
 #include <QtGlobal>
 #include <QDebug>
@@ -71,6 +72,11 @@ std::atomic<DWORD> g_ThreadId{0};
 std::vector<HWND> g_Windows;
 UINT_PTR g_HideTimer = 0;
 HHOOK g_Hook = nullptr;
+// The beep (LatencyBeep.h, MW_LATENCY_FLAG_SOUND): with every click's flag,
+// or on its own clock with a flag every kTickMs. Off unless the bench asks.
+LatencyBeep::Mode g_SoundMode = LatencyBeep::Mode::Off;
+UINT_PTR g_TickTimer = 0;
+constexpr UINT kTickMs = 500;
 
 // Runs on the overlay thread, synchronously inside Windows' input delivery: do
 // the least possible here and hand the work to the message loop. Windows
@@ -148,6 +154,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     switch (msg) {
     case kMsgClick: {
         showAll();
+        if (g_SoundMode == LatencyBeep::Mode::Click) LatencyBeep::beep();
         // When the flag went up, on the steady clock the relay stamps frames
         // with (QueryPerformanceCounter, shared by every process): a pass joins
         // it to the frame that first showed it (plan Wi-Fi W1).
@@ -292,12 +299,36 @@ void overlayThread()
         return;
     }
 
+    g_SoundMode = LatencyBeep::modeFromEnvironment();
+    if (g_SoundMode != LatencyBeep::Mode::Off) {
+        if (!LatencyBeep::start()) {
+            g_SoundMode = LatencyBeep::Mode::Off;
+        } else if (g_SoundMode == LatencyBeep::Mode::Tick) {
+            g_TickTimer = SetTimer(nullptr, 0, kTickMs, nullptr);
+            qInfo() << "[LatencyFlag] tick: a beep and a flag every" << kTickMs << "ms";
+        } else {
+            qInfo() << "[LatencyFlag] a beep with every injected click's flag";
+        }
+    }
+
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         // Thread messages carry no window: the hide timer and the rebuild
         // request are handled here rather than in a wndProc, because both of
         // them outlive the windows they act on.
         if (msg.hwnd == nullptr) {
+            if (msg.message == WM_TIMER && g_TickTimer && msg.wParam == g_TickTimer) {
+                // The beep's own clock: beep and flag together, no click.
+                showAll();
+                LatencyBeep::beep();
+                qInfo() << "[LatencyFlag] tick — shown at steady"
+                        << std::chrono::duration_cast<std::chrono::microseconds>(
+                               std::chrono::steady_clock::now().time_since_epoch())
+                               .count()
+                        << "us";
+                g_HideTimer = SetTimer(nullptr, g_HideTimer, LatencyFlag::kShowMs, nullptr);
+                continue;
+            }
             if (msg.message == WM_TIMER && msg.wParam == g_HideTimer) {
                 KillTimer(nullptr, g_HideTimer);
                 g_HideTimer = 0;
@@ -315,6 +346,12 @@ void overlayThread()
 
     UnhookWindowsHookEx(g_Hook);
     g_Hook = nullptr;
+    if (g_TickTimer) {
+        KillTimer(nullptr, g_TickTimer);
+        g_TickTimer = 0;
+    }
+    if (g_SoundMode != LatencyBeep::Mode::Off) LatencyBeep::stop();
+    g_SoundMode = LatencyBeep::Mode::Off;
     if (g_HideTimer) {
         KillTimer(nullptr, g_HideTimer);
         g_HideTimer = 0;

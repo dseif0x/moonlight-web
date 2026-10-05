@@ -36,3 +36,31 @@ full-screen one. Keep the client windowed.
 
 The plan's gate: if native PyroWave does not beat Steam's HEVC by 2 ms or
 more on NVIDIA, a browser port will not.
+
+## Click → sound (plan audio + DSCP, A1)
+
+`click-sound.cpp` (`build-click-sound.bat` → `mw-click-sound.exe`, static, no
+install) times the sound the way `click-photon.ps1` times the picture, on a
+Windows client, with no camera and no microphone.
+
+- **Host**: the latency flag on (`latency_flag_enabled`), and the server
+  started with `MW_LATENCY_FLAG_SOUND=click`. Each injected click then also
+  plays 20 ms of 1 kHz on the host's default output (`LatencyBeep`), the one
+  the stream captures. `tick` instead: beep and flag together every 500 ms,
+  without a click. The server's log dates each beep (asked, and into the output
+  buffer behind how many queued frames) on the relay's steady clock; with
+  `audiolog=1` the beep shows in the host's own capture as the `peak` column.
+- **Client**: the page plays sound (not a `--mute-audio` kiosk), the cursor
+  rests on the stream, then `mw-click-sound --clicks 30 --flag X,Y --out a.json`.
+  It clicks (SendInput), hears its own output through WASAPI loopback (each
+  packet carries the QPC time of its first sample) and, with `--flag`, watches
+  that screen pixel (a point of the host's flag in the stream) like
+  `click-photon.ps1`. Per click: click → sound, click → flag, sound − flag (the
+  lip-sync offset). `--tick SECS`, against a host in `tick`: the offset alone.
+- **Counted**: the click's send to this machine's mixer (the loopback tap): the
+  way up, the host's input, its beep through its mixer and loopback capture,
+  the pacer, Opus, the relay, the network, the browser's jitter buffer and
+  audio output. **Not counted**: the DAC, the speakers, a Bluetooth headset
+  (100-200 ms more with SBC/AAC).
+- Never on the host itself: a client there plays the stream back into the
+  capture.
