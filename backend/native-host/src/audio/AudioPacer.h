@@ -168,6 +168,19 @@ public:
 
     /// Samples waiting, in frames (fractional part dropped).
     size_t queuedFrames() const { return m_Queue.size() / kFrameFloats; }
+
+    /// The largest absolute sample of one frame (kFrameFloats floats): the
+    /// bench's audio log reads where a test tone starts from it.
+    static float peakOf(const float* frame)
+    {
+        float peak = 0.0f;
+        if (!frame) return peak;
+        for (size_t i = 0; i < kFrameFloats; ++i) {
+            const float v = frame[i] < 0.0f ? -frame[i] : frame[i];
+            if (v > peak) peak = v;
+        }
+        return peak;
+    }
     int64_t nextDueUs() const { return m_NextDueUs; }
 
     /// Frames of captured audio thrown away because the queue was full.

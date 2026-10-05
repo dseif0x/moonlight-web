@@ -53,7 +53,13 @@ describe('RtpVideo', () => {
             true,
             123456,
             false,
+            undefined,
         );
+        // The audio road's frames carry the host's wire frame id.
+        workers[0].onmessage({
+            data: { mid: 'video', data: new Uint8Array([1]).buffer, key: false, ts: 7, fid: 42 },
+        });
+        expect(onVideo).toHaveBeenLastCalledWith(new Uint8Array([1]), false, 7, false, 42);
 
         const ultra = trackEvent('ultra');
         attachRtpVideo(ultra, { onVideo, onUltra, log: () => {} });
@@ -61,6 +67,6 @@ describe('RtpVideo', () => {
         workers[1].onmessage({ data: { mid: 'ultra', data: frame.buffer, key: true, ts: 1 } });
         expect(onUltra).toHaveBeenCalledTimes(1);
         expect(onUltra.mock.calls[0][0].byteLength).toBe(20);
-        expect(onVideo).toHaveBeenCalledTimes(1);
+        expect(onVideo).toHaveBeenCalledTimes(2);
     });
 });

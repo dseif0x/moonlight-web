@@ -16,6 +16,7 @@
  */
 
 #include "NativeMediaEngine.h"
+#include "AudioPathLog.h"
 #include "FeedInfo.h"
 #include "FeedPublisher.h"
 #include "FeedSubscriber.h"
@@ -31,6 +32,8 @@
 #include <QDebug>
 #include <QImage>
 #include <QJsonArray>
+
+#include <chrono>
 
 namespace {
 
@@ -58,6 +61,19 @@ constexpr int kVideoFormatAv1High444 = 0x4000;  // High 4:4:4 8-bit
 
 /// Frame type as the relays read it: 1 is a keyframe (FRAME_TYPE_IDR).
 constexpr int kFrameTypeKeyframe = 1;
+
+/// The bench's audio log (`audiolog=1`): the engine's half of a packet, on the
+/// steady clock the pacer and the relay stamp with. Nothing when it is off.
+void noteAudioEmitted(const mw::native::AudioPacket& packet)
+{
+    AudioPathLog& log = AudioPathLog::instance();
+    if (!log.enabled()) return;
+    const int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch())
+                              .count();
+    log.emitted(packet.capturedUs, nowUs, packet.queuedFrames, packet.peak, packet.silence,
+                packet.size);
+}
 constexpr int kFrameTypeDelta = 0;
 
 /// The client's decodable formats, in the engine's own preference order.
@@ -293,6 +309,7 @@ void NativeMediaEngine::startCapture(const StartParams& params)
     if (params.captureAudio) {
         onAudio = [this](const mw::native::AudioPacket& packet) {
             if (!packet.data || packet.size == 0) return;
+            noteAudioEmitted(packet);
             emit audioSampleReady(QByteArray(reinterpret_cast<const char*>(packet.data),
                                              static_cast<qsizetype>(packet.size)));
         };
@@ -471,6 +488,7 @@ void NativeMediaEngine::startSubscriber(const StartParams& params)
         config, nullptr,
         [this](const mw::native::AudioPacket& packet) {
             if (!packet.data || packet.size == 0) return;
+            noteAudioEmitted(packet);
             emit audioSampleReady(QByteArray(reinterpret_cast<const char*>(packet.data),
                                              static_cast<qsizetype>(packet.size)));
         },

@@ -173,12 +173,14 @@ void PacedOpusSink::runLoop()
 
         for (int i = 0; i < due; ++i) {
             AudioPacer::Take got;
+            size_t queued = 0;
             {
                 // Taken under the lock (it moves the pacer's clock and its
                 // queue), encoded outside it: a push() from the capture's
                 // thread must never wait on libopus.
                 std::lock_guard<std::mutex> lock(m_Mutex);
                 got = m_Pacer->take(frame.data(), now);
+                queued = m_Pacer->queuedFrames();
             }
             if (got == AudioPacer::Take::Deferred) {
                 deferred = true;
@@ -191,6 +193,9 @@ void PacedOpusSink::runLoop()
             out.size = n;
             out.samplesPerChannel = AudioPacer::kFrameSamples;
             out.capturedUs = now;
+            out.queuedFrames = static_cast<int>(queued);
+            out.peak = AudioPacer::peakOf(frame.data());
+            out.silence = got == AudioPacer::Take::Silence;
             m_OnPacket(out);
             m_Packets.fetch_add(1, std::memory_order_relaxed);
         }

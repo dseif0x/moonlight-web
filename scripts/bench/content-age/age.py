@@ -134,6 +134,16 @@ def run(args):
         with open(csv_path, "w", newline="") as f:
             f.write(page.eval("mwFrameLog.csv()", timeout=120) or "")
         print("saved", csv_path)
+    # What the browser did with the sound, a row a second (frontend
+    # stream/AudioStats.js; plan audio + DSCP, A0): the whole stream's, so the
+    # pass reads its own seconds by the rows' `t`.
+    audio = page.eval("window.mwAudio ? JSON.stringify(mwAudio.last) : null")
+    if audio and audio != "null":
+        data["audioLast"] = json.loads(audio)
+        csv_path = os.path.join(OUT, args.tag + ".audio.csv")
+        with open(csv_path, "w", newline="") as f:
+            f.write(page.eval("mwAudio.csv()", timeout=60) or "")
+        print("saved", csv_path)
     path = os.path.join(OUT, args.tag + ".json")
     with open(path, "w") as f:
         json.dump(data, f)

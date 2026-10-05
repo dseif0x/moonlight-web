@@ -55,6 +55,19 @@ export function rtpLegacyApi() {
     }
 }
 
+/**
+ * The audio road's wait for a frame asked again, in ms (bench: localStorage
+ * mw_aroad_giveup), or undefined for the worker's default.
+ */
+export function aroadGiveUpMs() {
+    try {
+        const v = Number(globalThis.localStorage?.getItem('mw_aroad_giveup'));
+        return Number.isFinite(v) && v > 0 && v <= 1000 ? v : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 /** Lets an audio receiver's frames through untouched, on the legacy road. */
 export function passEncodedAudio(receiver) {
     const { readable, writable } = receiver.createEncodedStreams();
@@ -97,7 +110,7 @@ function noteFrame(m) {
 /**
  * Takes the frames of the RTP track @p event announced (an `ontrack` event).
  * @param {RTCTrackEvent} event
- * @param {{onVideo?: function(Uint8Array, boolean, number): void,
+ * @param {{onVideo?: function(Uint8Array, boolean, number, boolean, number=): void,
  *          onUltra?: function(ArrayBuffer, number): void,
  *          log?: function(string): void}} sinks
  * @returns {{mid: string, worker: Worker|null, stop: function(): void}}
@@ -148,7 +161,7 @@ export function attachRtpVideo(event, { onVideo, onUltra, onNack, log = console.
                 onUltra(m.data.slice(ULTRA_RTP_PREFIX_BYTES), performance.now());
             return;
         }
-        if (onVideo) onVideo(new Uint8Array(m.data), m.key, m.ts, m.lost === true);
+        if (onVideo) onVideo(new Uint8Array(m.data), m.key, m.ts, m.lost === true, m.fid);
     };
     // Nothing of the browser's own buffering is wanted before the transform.
     try {
@@ -173,7 +186,10 @@ export function attachRtpVideo(event, { onVideo, onUltra, onNack, log = console.
         worker.onmessage = (msg) => onFrame(msg.data);
         worker.onerror = (e) =>
             log('[MW-RTP] transform worker of ' + mid + ' failed: ' + e.message);
-        event.receiver.transform = new globalThis.RTCRtpScriptTransform(worker, { mid });
+        event.receiver.transform = new globalThis.RTCRtpScriptTransform(worker, {
+            mid,
+            giveUpMs: aroadGiveUpMs(),
+        });
     }
     log('[MW-RTP] taking the frames of RTP track ' + mid + ' by Encoded Transform');
     // The first seconds in figures: packets that came, frames assembled.

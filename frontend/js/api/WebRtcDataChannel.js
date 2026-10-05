@@ -769,11 +769,25 @@ export class WebRtcDataChannel {
      * before the DataChannels, and the decoder is only made once they are:
      * until then the frames from the latest keyframe on are held.
      */
-    _onRtpVideoFrame(frame, isKeyframe, backendTs, lost = false) {
+    _onRtpVideoFrame(frame, isKeyframe, backendTs, lost = false, frameId = undefined) {
         // A keyframe closes the request, as on the DataChannel path.
         if (isKeyframe) {
             this._idrOutstanding = false;
             this._idrBackoffMs = this.IDR_THROTTLE_MS;
+        }
+        // The audio road carries the host's wire frame id: a frame given up on
+        // shows as a gap in it, and StreamView repairs it as on the
+        // DataChannel — named to a host that heals by invalidation (deltas
+        // decode on), a keyframe asked for otherwise.
+        if (frameId !== undefined) {
+            if (!this.connected) {
+                if (isKeyframe) this._rtpHeld = [];
+                if (this._rtpHeld && this._rtpHeld.length < 240)
+                    this._rtpHeld.push([frame, isKeyframe, backendTs, frameId]);
+                return;
+            }
+            if (this.onVideo) this.onVideo(frame, isKeyframe, backendTs, frameId);
+            return;
         }
         // A frame went missing before this one (the audio road gave up on its
         // chunks): deltas wait for the keyframe asked for. These frames carry
@@ -802,8 +816,8 @@ export class WebRtcDataChannel {
         const held = this._rtpHeld;
         this._rtpHeld = null;
         if (!held || !this.onVideo) return;
-        for (const [frame, isKeyframe, backendTs] of held)
-            this.onVideo(frame, isKeyframe, backendTs, 0);
+        for (const [frame, isKeyframe, backendTs, frameId = 0] of held)
+            this.onVideo(frame, isKeyframe, backendTs, frameId);
     }
 
     _createPeerConnection() {
@@ -839,8 +853,8 @@ export class WebRtcDataChannel {
             // `aroad`, U1.4 ter), never played.
             if (evt.track.kind === 'video' || /^[vu]audio$/.test(evt.transceiver?.mid || '')) {
                 const rtp = attachRtpVideo(evt, {
-                    onVideo: (frame, isKeyframe, backendTs, lost) =>
-                        this._onRtpVideoFrame(frame, isKeyframe, backendTs, lost),
+                    onVideo: (frame, isKeyframe, backendTs, lost, frameId) =>
+                        this._onRtpVideoFrame(frame, isKeyframe, backendTs, lost, frameId),
                     onUltra: (buf, arrivalMs) => this._ultra?.sink.onMessage(buf, arrivalMs),
                     // The audio road's missing chunks, asked again (U1.4 quater).
                     onNack: (nack) => {

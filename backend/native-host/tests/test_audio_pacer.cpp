@@ -113,6 +113,16 @@ void run_audio_pacer_tests()
         CHECK(allEqual(out, 3.0f));
     }
 
+    SECTION("AudioPacer::peakOf — the largest absolute sample, a negative one included");
+    {
+        std::vector<float> frame(AudioPacer::kFrameFloats, 0.0f);
+        CHECK_EQ(AudioPacer::peakOf(frame.data()), 0.0f);
+        frame[3] = 0.25f;
+        frame[AudioPacer::kFrameFloats - 1] = -0.5f; // the last float counts
+        CHECK_EQ(AudioPacer::peakOf(frame.data()), 0.5f);
+        CHECK_EQ(AudioPacer::peakOf(nullptr), 0.0f);
+    }
+
     SECTION("AudioPacer — silence pushed by the endpoint is queued like any sample");
     {
         AudioPacer pacer(4);

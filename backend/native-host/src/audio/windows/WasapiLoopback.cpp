@@ -352,7 +352,7 @@ void WasapiLoopback::runLoop()
 
         const int due = pacer.dueFrames(now);
         for (int i = 0; i < due; ++i) {
-            pacer.pop(frame.data());
+            const bool captured = pacer.pop(frame.data());
             const size_t n = encoder.encode(frame.data(), packet);
             if (n == 0) continue;
             AudioPacket out;
@@ -360,6 +360,9 @@ void WasapiLoopback::runLoop()
             out.size = n;
             out.samplesPerChannel = AudioPacer::kFrameSamples;
             out.capturedUs = now;
+            out.queuedFrames = static_cast<int>(pacer.queuedFrames());
+            out.peak = AudioPacer::peakOf(frame.data());
+            out.silence = !captured;
             m_OnPacket(out);
             m_Packets.fetch_add(1, std::memory_order_relaxed);
         }

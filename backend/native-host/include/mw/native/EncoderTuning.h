@@ -458,6 +458,11 @@ struct EncoderTuning
     /// trip on a Mac in Wi-Fi; 2 made the association with Chrome fail within
     /// seconds, and the key refuses it (04/10/2026).
     int sctpScheduler = -1;
+    /// Each audio packet's way through the host — the pacer's tick, its queue,
+    /// the frame's peak, the relay thread, the RTP track — written as a CSV
+    /// next to the log when the session ends (plan « le son et la priorité des
+    /// paquets », A0). false, the product: nothing kept.
+    bool audioLog = false;
 
     bool isDefault() const
     {
@@ -486,7 +491,7 @@ struct EncoderTuning
                sctpCongestion < 0 && floodKbps == 0 && floodBytes == 0 && !floodLikeVideo &&
                ultraSynthKb == 0 && !ultraUnordered && !relayLog && paceMultiple == 0 &&
                paceBurstKb == 0 && retransCutPermille < 0 && sctpBufferKb == 0 && linkHoldMs == 0 &&
-               sctpMaxBurst < 0 && sctpScheduler < 0;
+               sctpMaxBurst < 0 && sctpScheduler < 0 && !audioLog;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -595,6 +600,7 @@ struct EncoderTuning
         if (linkHoldMs > 0) add("linkhold=" + std::to_string(linkHoldMs));
         if (sctpMaxBurst >= 0) add("sctpburst=" + std::to_string(sctpMaxBurst));
         if (sctpScheduler >= 0) add("sctpss=" + std::to_string(sctpScheduler));
+        if (audioLog) add("audiolog=1");
         return s;
     }
 };

@@ -23,13 +23,19 @@
  * never sees it, ours decodes it.
  */
 
-/** How long a complete video frame waits for an older one asked again. */
+/** How long a complete video frame waits for an older one asked again (the
+ * page may set another, bench key mw_aroad_giveup). */
 const GIVE_UP_MS = 15;
+/** Bytes of the audio road's chunk header. */
+const HEAD = 12;
 
 /**
  * The bench's other road (U1.4 ter, tracks "vaudio" / "uaudio"): each frame
  * comes cut in Opus packets — 'M', flags (1 = key), frame seq, index, count
- * (u16, big endian), then the frame's bytes — and is put back together here.
+ * (u16, big endian), the host's wire frame id (u32, big endian, the
+ * DataChannel's sequence), then the frame's bytes — and is put back together
+ * here. The frame id lets the page name a frame given up on to a host that
+ * heals by invalidation, as it does on the DataChannel.
  * Chrome asks nothing again on this road: the chunks seen missing (a hole in a
  * frame's indexes, or a newer frame started) are asked for by `nack` messages,
  * which the page sends on the input channel (U1.4 quater). Video frames go out
@@ -37,7 +43,7 @@ const GIVE_UP_MS = 15;
  * GIVE_UP_MS for an older one goes anyway, marked `lost`. Ultra frames stand
  * alone and go as they complete.
  */
-function audioRoad(reader, outMid) {
+function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS) {
     const ordered = outMid === 'video';
     const tag = ordered ? 'v' : 'u';
     const open = new Map(); // seq → frame being put together
@@ -78,6 +84,7 @@ function audioRoad(reader, outMid) {
                 at: now,
                 held: f.held,
                 lost,
+                fid: f.fid,
             },
             [data.buffer],
         );
@@ -92,7 +99,7 @@ function audioRoad(reader, outMid) {
             post(next, f);
         }
         clearTimeout(gapTimer);
-        gapTimer = ready.size ? setTimeout(giveUp, GIVE_UP_MS) : 0;
+        gapTimer = ready.size ? setTimeout(giveUp, giveUpMs) : 0;
     };
     const giveUp = () => {
         gapTimer = 0;
@@ -108,7 +115,7 @@ function audioRoad(reader, outMid) {
             if (done || !frame) return;
             const buf = frame.data;
             const dv = new DataView(buf);
-            if (buf.byteLength < 8 || dv.getUint8(0) !== 0x4d) return pump();
+            if (buf.byteLength < HEAD || dv.getUint8(0) !== 0x4d) return pump();
             const seq = dv.getUint16(2);
             const idx = dv.getUint16(4);
             const count = dv.getUint16(6);
@@ -124,6 +131,7 @@ function audioRoad(reader, outMid) {
                     hi: -1,
                     asked: new Set(),
                     key: (dv.getUint8(1) & 1) === 1,
+                    fid: dv.getUint32(8),
                 };
                 open.set(seq, f);
                 // A newer frame started: what an older one still lacks is lost.
@@ -131,9 +139,9 @@ function audioRoad(reader, outMid) {
                     if (o !== f && after(seq, s)) ask(s, o, 0, o.parts.length);
             }
             if (!f.parts[idx]) {
-                f.parts[idx] = new Uint8Array(buf, 8);
+                f.parts[idx] = new Uint8Array(buf, HEAD);
                 f.got++;
-                f.bytes += buf.byteLength - 8;
+                f.bytes += buf.byteLength - HEAD;
             }
             if (idx > f.hi + 1) ask(seq, f, f.hi + 1, idx);
             if (idx > f.hi) f.hi = idx;
@@ -154,7 +162,7 @@ function audioRoad(reader, outMid) {
                 if (ordered) flush();
             } else {
                 ready.set(seq, f);
-                if (!gapTimer) gapTimer = setTimeout(giveUp, GIVE_UP_MS);
+                if (!gapTimer) gapTimer = setTimeout(giveUp, giveUpMs);
             }
             return pump();
         });
@@ -169,7 +177,8 @@ self.onrtctransform = (event) => {
     // "uaudio": the bench's Ultra stream on the same road, posted without
     // the VP8 header of its video track.
     if (mid === 'vaudio' || mid === 'uaudio') {
-        audioRoad(reader, mid === 'vaudio' ? 'video' : 'ultraraw').catch((e) =>
+        const giveUpMs = (transformer.options && transformer.options.giveUpMs) || GIVE_UP_MS;
+        audioRoad(reader, mid === 'vaudio' ? 'video' : 'ultraraw', giveUpMs).catch((e) =>
             self.postMessage({ mid, error: String(e && e.message ? e.message : e) }),
         );
         return;

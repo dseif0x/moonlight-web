@@ -235,6 +235,9 @@ const char* const kUsage =
     "  linkhold=<ms>     a picture held, not encoded, once video has waited outside usrsctp\n"
     "                    that long, 1-100; the freshest goes once it drained (Windows host;\n"
     "                    with sctpbuf=)\n"
+    "  audiolog=0|1      each audio packet's way through the host (pacer tick and queue,\n"
+    "                    peak, relay thread, RTP track), a CSV next to the log when the\n"
+    "                    session ends (plan audio + DSCP, A0)\n"
     "the bench's own:\n"
     "  dump=<path>      the encoded stream as it comes out (Annex-B, or OBUs for AV1)\n"
     "  lose=<frames>[x<burst>][k]  every N frames, report the latest one lost (reference\n"
@@ -574,6 +577,10 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
     } else if (key == "linkhold") {
         tuning.linkHoldMs = value.toInt(&ok);
         ok = ok && tuning.linkHoldMs >= 0 && tuning.linkHoldMs <= 100;
+    } else if (key == "audiolog") {
+        const int v = value.toInt(&ok);
+        ok = ok && (v == 0 || v == 1);
+        tuning.audioLog = v == 1;
     } else {
         return false;
     }

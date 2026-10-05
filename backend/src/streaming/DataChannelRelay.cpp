@@ -16,6 +16,7 @@
  */
 
 #include "DataChannelRelay.h"
+#include "AudioPathLog.h"
 #include "ClipboardBridge.h"
 #include "InputMessageCodec.h"
 #include "IMediaEngine.h"
@@ -753,6 +754,20 @@ DataChannelRelay::~DataChannelRelay()
         qInfo() << "[DataChannelRelay] frame log:" << m_FrameLog->summary().c_str()
                 << (ok ? "— written to" : "— could NOT be written to") << path;
     }
+    // The bench's audio log (`audiolog=1`): the same place, the same way.
+    if (m_AudioLog) {
+        AudioPathLog& audioLog = AudioPathLog::instance();
+        audioLog.stop();
+        const QString logFile = Logger::instance()->logFilePath();
+        const QString dir =
+            logFile.isEmpty() ? QDir::tempPath() : QFileInfo(logFile).absolutePath();
+        const QString path = dir + QStringLiteral("/relay-audio-%1-%2.csv")
+                                       .arg(QCoreApplication::applicationPid())
+                                       .arg(QDateTime::currentMSecsSinceEpoch());
+        const bool ok = audioLog.writeCsv(path.toStdString());
+        qInfo() << "[DataChannelRelay] audio log:" << audioLog.summary().c_str()
+                << (ok ? "— written to" : "— could NOT be written to") << path;
+    }
     // Static call: dynamic dispatch is meaningless in a destructor.
     DataChannelRelay::stop();
 }
@@ -848,6 +863,12 @@ void DataChannelRelay::setLinkBench(const mw::native::EncoderTuning& tuning)
         m_FrameLog = std::make_unique<RelayFrameLog>();
         qWarning() << "[DataChannelRelay] bench frame log on (relaylog=1): each video frame's way "
                       "through the relay, written next to the log when the session ends";
+    }
+    if (tuning.audioLog && !m_AudioLog) {
+        m_AudioLog = true;
+        AudioPathLog::instance().start();
+        qWarning() << "[DataChannelRelay] bench audio log on (audiolog=1): each audio packet's "
+                      "way through the host, written next to the log when the session ends";
     }
     if (m_Loss.active())
         qWarning() << "[DataChannelRelay] bench losses: video messages thrown away before SCTP,"
@@ -1664,6 +1685,8 @@ void DataChannelRelay::sendBufferedKeyframe()
 void DataChannelRelay::onAudioSample(const QByteArray& data)
 {
     if (m_Stopping.load()) return;
+    // `audiolog=1`: when the packet reached this thread, before the lock.
+    const int64_t inUs = m_AudioLog ? steadyUs() : 0;
 
     // Serialize against track teardown in stop().
     std::lock_guard<std::mutex> lk(m_AudioMutex);
@@ -1671,10 +1694,14 @@ void DataChannelRelay::onAudioSample(const QByteArray& data)
         static int notReady = 0;
         if (++notReady <= 3)
             qInfo() << "[DataChannelRelay] onAudioSample dropped — audio track not ready";
+        if (m_AudioLog)
+            AudioPathLog::instance().relayed(static_cast<size_t>(data.size()), inUs, 0,
+                                             AudioPathLog::Outcome::NotReady, m_AudioRtpTs);
         return;
     }
 
     // Send the Opus packet as one RTP frame; the OpusRtpPacketizer wraps it.
+    const uint32_t rtpTs = m_AudioRtpTs;
     auto frameInfo = std::make_shared<rtc::FrameInfo>(m_AudioRtpTs);
     // Advance by the negotiated Opus frame size (48 kHz clock): one clean tick per
     // packet. A jittery arrival-time clock makes NetEq time-stretch → robotic audio.
@@ -1684,12 +1711,17 @@ void DataChannelRelay::onAudioSample(const QByteArray& data)
     if (data.size() > 0)
         std::memcpy(bin.data(), data.constData(), static_cast<size_t>(data.size()));
 
+    AudioPathLog::Outcome outcome = AudioPathLog::Outcome::Sent;
     try {
         m_AudioTrack->sendFrame(std::move(bin), *frameInfo);
     } catch (const std::exception& e) {
+        outcome = AudioPathLog::Outcome::Error;
         if (!m_Stopping.load())
             qWarning() << "[DataChannelRelay] audio sendFrame error:" << e.what();
     }
+    if (m_AudioLog)
+        AudioPathLog::instance().relayed(static_cast<size_t>(data.size()), inUs, steadyUs(),
+                                         outcome, rtpTs);
 }
 
 void DataChannelRelay::onShimConnectionTerminated(int errorCode)

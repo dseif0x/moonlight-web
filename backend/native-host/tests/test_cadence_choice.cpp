@@ -262,6 +262,17 @@ void run_cadence_choice_tests()
         CHECK_EQ(s.describe(), std::string("sctpss=4"));
     }
 
+    // The audio log (plan audio + DSCP, A0): off unless said, named when set.
+    SECTION("audiolog= — off by default, named when set");
+    {
+        EncoderTuning t;
+        CHECK(!t.audioLog);
+        CHECK(t.isDefault());
+        t.audioLog = true;
+        CHECK(!t.isDefault());
+        CHECK_EQ(t.describe(), std::string("audiolog=1"));
+    }
+
     // A client whose decoder falls silent under the reference repairs asks for
     // none (/start's ref_invalidation): the bench's dpb=1, on every encoder.
     SECTION("refuseReferenceRepairs — one reference for that client, a bench's dpb kept");
