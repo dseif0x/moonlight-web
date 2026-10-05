@@ -4736,6 +4736,56 @@ l'hôte natif peut streamer en AV1, quand la chaîne Vulkan Video est choisie
 dans l'administration. Le 1080p part alors en 1792×1008, agrandi par le
 navigateur. Rien ne change pour qui garde le réglage par défaut.
 
+### 8o.19 Vulkan Video par défaut sur AMD, et la cause du CBR de VA-API (05/10/2026)
+
+Design §32.28. UM790Pro (780M, Mesa 26.2.3, noyau 7.0, VCN 1.24), Ubuntu sous
+Wayland, la DEV compilée de `main` (archive du Plan RC, commits `4e998380` et
+`644f57e1` vérifiés dedans), `MW_LAN_ONLY=1`. Passes de 21:33:43 à 21:38:05,
+avant l'UDP marqué du Plan DSCP/WMM (21:50) ; la carte Wi-Fi en mode moniteur
+passif de ce plan n'a pas été touchée. Sorties : `/tmp/vastill` sur l'UM790Pro,
+scripts `scratchpad\um\vaapi\`.
+
+**Les tests.**
+- `linux_route_choice`, `selector`, `capabilities` : 539/539.
+- `linux_session` : 112/112.
+  - La session HEVC sans réglage prend « Vulkan compute → Vulkan Video »
+    (« auto: the vendor table has Vulkan Video for AMD »).
+  - La vague VA-API dit « over 120 frames every 480 ».
+- 0 reset VCN.
+
+**La page de §8o.15** : `still.html?anim=1`, 1080p60, 20 Mbit/s tenus
+(`governor=0`), 24 s par passe, capture KMS ; 0 erreur ffmpeg partout.
+
+| passe | route | Mbit/s après 1 s | Ko par image, par 4 s |
+|---|---|---|---|
+| défaut HEVC | Vulkan compute → Vulkan Video | 0,59 | 2,4 · 1,2 … 1,1 |
+| défaut HEVC, intra-refresh | idem, 120 toutes les 480 | 1,00 | 1,2 et 3,7 en balayage |
+| `vaapi` HEVC | EGL → VA-API | 13,65 | 8,3 · 31,6 … 30,9 |
+| `vaapi` H.264 | EGL → VA-API | 17,33 | 4,4 · 40,1 … 40,9 |
+| défaut H.264, intra-refresh | Vulkan compute → VA-API, 120 toutes les 480 | 17,52 | 40,2 … 40,8 |
+| défaut H.264, `irdist=-1` | idem, dos à dos | 17,70 | 40,2 … 40,6 |
+| `vaapi` HEVC, intra-refresh | EGL → VA-API, 120 toutes les 480 | 15,03 | 30 à 36 |
+| `vaapi` HEVC, `vaminqp=18` | EGL → VA-API | 0,51 | 2,0 · 1,0 … |
+| `vaapi` H.264, `vaminqp=18` | EGL → VA-API | 0,25 | 1,9 · 0,5 … |
+
+**Ce qu'on en retient.**
+- **Le défaut est validé** : sur AMD, le HEVC passe par Vulkan Video, à
+  0,6 Mbit/s sur la page fixe.
+- **La cause du fond de VA-API est le QP.** Sous Mesa 26, le contrôle de débit
+  descend sous 18 sur la page fixe et affine jusqu'à remplir le budget. En
+  H.264 aussi : le preset HEVC (« speed » devenu « balance ») n'y est pour
+  rien. Un plancher à 18 le ramène à 0,25-0,5 Mbit/s. VA-API ne donne pas son
+  QP par image : le plancher est la preuve.
+- **La vague espacée est juste mais n'y change rien** tant que ce fond remplit
+  le budget : 17,5 contre 17,7 Mbit/s.
+- **Reste à Bruno** : un plancher de QP de 18 par défaut pour VA-API (celui de
+  NVENC et d'AMF). Le H.264 sur AMD passe toujours par VA-API.
+
+**Concrètement, pour l'utilisateur** : sous Linux avec une carte AMD, un stream
+HEVC sur un bureau calme prend moins de 1 Mbit/s au lieu de 14. En H.264, le
+bureau calme prend encore presque tout le débit réglé, jusqu'à la décision sur
+le plancher de QP.
+
 ## 8p. Framerate « Hôte » : l'âge du contenu (29-30/09/2026, provisoire)
 
 Plan `framerate-hote`, design §33. Tout passe par des clés de banc :

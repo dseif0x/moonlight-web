@@ -6572,8 +6572,20 @@ refus ou un build sans elle.
   (décision de Bruno, `059a970e`) ; `/api/native/status` dit `vulkan` pour ce
   qu'Auto prend sur AMD (`f7683e83`).
 
-**Reste** : le banc sur l'UM790Pro (le 780M, Mesa 26) ; les bancs de la cause
-(a).
+**Au banc** (05/10 au soir, §8o.19 du banc) :
+- **Le défaut est validé.** Sans réglage, le HEVC sur le 780M prend Vulkan
+  Video, à 0,59 Mbit/s sur la page fixe, et à 1,0 avec l'intra-refresh espacé.
+- **La cause de VA-API est le QP, pas la vague.** Sans intra-refresh, VA-API
+  reste à 13,7 Mbit/s en HEVC et à 17,3 en H.264 : le preset HEVC est hors de
+  cause. Avec `vaminqp=18`, il tombe à 0,51 en HEVC et à 0,25 en H.264. Sous
+  Mesa 26, le contrôle de débit descend sous QP 18 et affine la page fixe
+  jusqu'à remplir le budget.
+- La vague espacée est juste mais ne change rien tant que ce fond remplit le
+  budget (17,5 contre 17,7 Mbit/s).
+
+**Reste, à Bruno** : un plancher de QP de 18 par défaut pour VA-API, comme
+NVENC et AMF. Le H.264 sur AMD passe toujours par VA-API, à 17 Mbit/s sur un
+écran fixe.
 
 **Concrètement, pour l'utilisateur** : sous Linux avec une carte AMD récente,
 le HEVC et l'AV1 passent par Vulkan Video sans rien régler. Un bureau presque
