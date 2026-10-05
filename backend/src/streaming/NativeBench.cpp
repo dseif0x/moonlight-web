@@ -131,7 +131,7 @@ const char* const kUsage =
     "  quality=speed|balanced|quality   AMF quality preset\n"
     "  lowlatency=0|1   AMF internal low-latency mode (H.264/HEVC)\n"
     "  amfminqp=<qp>    AMF QP floor (H.264/HEVC); -1 = none, default 18\n"
-    "  vaminqp=<qp>     VA-API QP floor (H.264/HEVC), 1..51; default none\n"
+    "  vaminqp=<qp>     VA-API QP floor (H.264/HEVC); -1 = none, default 18\n"
     "  tu=1..7          oneVPL TargetUsage (1 quality .. 7 speed)\n"
     "  lowpower=0|1     oneVPL fixed-function engine (VDENC); engine's own is on\n"
     "  mbbrc=0|1        oneVPL macroblock-level rate control\n"
@@ -315,7 +315,7 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
         ok = ok && (tuning.amfMinQp == -1 || (tuning.amfMinQp >= 1 && tuning.amfMinQp <= 51));
     } else if (key == "vaminqp") {
         tuning.vaapiMinQp = value.toInt(&ok);
-        ok = ok && tuning.vaapiMinQp >= 1 && tuning.vaapiMinQp <= 51;
+        ok = ok && (tuning.vaapiMinQp == -1 || (tuning.vaapiMinQp >= 1 && tuning.vaapiMinQp <= 51));
     } else if (key == "nvirperiod") {
         tuning.nvencIntraRefreshPeriod = value.toInt(&ok);
         ok = ok && tuning.nvencIntraRefreshPeriod >= 1 && tuning.nvencIntraRefreshPeriod <= 3600;

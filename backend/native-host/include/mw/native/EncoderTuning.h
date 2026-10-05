@@ -79,8 +79,8 @@ struct EncoderTuning
     /// AMF (H.264, HEVC): the same floor. 0 is the engine's own (18 — see
     /// AmfEncoder.cpp), -1 none at all.
     int amfMinQp = 0;
-    /// VA-API: a QP floor, for the bench only (design §32.28, the CBR that no
-    /// longer settles under Mesa 26). 0 is the engine's own: none.
+    /// VA-API: the same floor. 0 is the engine's own (18 — see
+    /// encode::kVaapiMinQp, design §32.28), -1 none at all.
     int vaapiMinQp = 0;
 
     /// NVENC intra-refresh: frames from one sweep's start to the next

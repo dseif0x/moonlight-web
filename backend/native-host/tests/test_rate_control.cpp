@@ -17,11 +17,13 @@
 
 #include "encode/RateControl.h"
 #include "encode/RateGovernor.h"
+#include "mw/native/EncoderTuning.h"
 #include "native_test_framework.h"
 
 using mw::native::LinkFeedback;
 using mw::native::encode::RateGovernor;
 
+using mw::native::EncoderTuning;
 using mw::native::encode::EffectiveCadence;
 using mw::native::encode::intraRefreshCountFrames;
 using mw::native::encode::intraRefreshPeriodFrames;
@@ -30,10 +32,12 @@ using mw::native::encode::kIntraRefreshMinFrames;
 using mw::native::encode::kIntraRefreshSeconds;
 using mw::native::encode::kStillBoost;
 using mw::native::encode::kStillMaxKbps;
+using mw::native::encode::kVaapiMinQp;
 using mw::native::encode::kVbvFrameRateFloor;
 using mw::native::encode::LinkOccupancy;
 using mw::native::encode::RefineConvergence;
 using mw::native::encode::stillBitrateKbps;
+using mw::native::encode::vaapiMinQp;
 using mw::native::encode::vbvBitsPerFrame;
 
 void run_rate_control_tests()
@@ -775,5 +779,14 @@ void run_rate_control_tests()
             changed = c.noteFrame(1000 + i * 16667) || changed;
         CHECK(changed);
         CHECK_EQ(c.currentFps, 60);
+    }
+
+    SECTION("VA-API's QP floor — 18 by default (§32.28), the bench's vaminqp= over it, -1 none");
+    {
+        CHECK_EQ(kVaapiMinQp, 18);
+        CHECK_EQ(vaapiMinQp(0), 18);
+        CHECK_EQ(vaapiMinQp(26), 26);
+        CHECK_EQ(vaapiMinQp(-1), 0);
+        CHECK_EQ(vaapiMinQp(EncoderTuning{}.vaapiMinQp), 18);
     }
 }

@@ -510,7 +510,7 @@ bool VaapiEncoder::open(const std::string& renderNode, bool packedHeaders, std::
               std::to_string(
                   vbvBits(static_cast<uint32_t>(m_BitrateKbps) * 1000u, m_Fps, m_Tuning.vbvFrames) /
                   8 / 1024) +
-              " KB" +
+              " KB, QP >= " + std::to_string(vaapiMinQp(m_Tuning.vaapiMinQp)) +
               (m_IntraRefresh
                    ? ", intra-refresh over " + std::to_string(m_IntraRefreshPeriod) + " frames" +
                          (m_IntraRefreshDistance > m_IntraRefreshPeriod
@@ -591,20 +591,16 @@ bool VaapiEncoder::renderRateControl(std::string& error)
     rc.target_percentage = 100;
     rc.window_size = 1000;
     rc.initial_qp = 0;
-    // No QP floor, unlike NVENC and AMF, because nothing here needs one.
-    // Measured 22/09/2026 on the 780M (Mesa 23.2, 1080p60, 20 Mbps, a text
-    // page with a small spinner): after a keyframe the rate control spends
-    // ~3.5 s at the full budget, then under 1 KB a frame — none of the steady
-    // refinement that cost NVENC 7.7 Mbps and AMF 8.7. The driver does honour
-    // min_qp (40 cut scrolling text from 16.7 to 6.3 Mbps), but 18, 22 and 26
-    // left the still page byte for byte where it was (3.0-3.15 Mbps over 20 s):
-    // that burst runs above QP 26. Mesa 23.2 had no rolling intra-refresh
-    // either, so there was no sweep to space out; Mesa 26.2.3 has one
-    // (29/09/2026), which rolled without a gap (design §32.24) until it was
-    // spaced like Vulkan Video's (05/10/2026, §32.28).
-    // Under Mesa 26 the still page no longer settles (design §32.28): the
-    // bench's vaminqp= measures a floor again.
-    rc.min_qp = m_Tuning.vaapiMinQp > 0 ? static_cast<uint32_t>(m_Tuning.vaapiMinQp) : 0;
+    // A QP floor, as NVENC and AMF have (kVaapiMinQp, 18; vaminqp= for the
+    // bench, -1 none). Measured 22/09/2026 on the 780M under Mesa 23.2, none
+    // was needed: on a text page with a small spinner the rate control spent
+    // ~3.5 s at the full budget, then under 1 KB a frame, and floors of 18 to
+    // 26 left it byte for byte where it was. Under Mesa 26.2.3 the same page
+    // never settles: the CBR refines below QP 18 until the budget is full
+    // (17.3 Mbit/s of 20 in H.264), and 18 brings it to 0.25 (design §32.28,
+    // bench §8o.19). The rolling intra-refresh Mesa 26 added is spaced like
+    // Vulkan Video's (refreshesThisFrame).
+    rc.min_qp = static_cast<uint32_t>(vaapiMinQp(m_Tuning.vaapiMinQp));
     rc.max_qp = 51;
     // No filler: on a still desktop CBR padding would be bytes on the wire that
     // carry nothing, and the still-screen floor already keeps the link alive.
