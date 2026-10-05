@@ -1021,6 +1021,86 @@ client in Wi-Fi.
 - **Open:** a real load (heavier content or another station), and the Mac,
   where SCTP's tail was the worst (W0-W2).
 
+### 05/10/2026 — DSCP on the wire and on the air, and the host's share of a sound (audio + DSCP plan, D0 and A1)
+
+Plan « le son et la priorité des paquets », session moonlight-web-da. Tools in
+`scripts/bench/dscp/` and `scripts/bench/photon/` (README of each holds the
+detail). Commits `d62b565b`, `edfbfe08`, `1489e114` (the host's audio log rode
+in on a POC commit), `d9734962`.
+
+**Who marks what today (code, 05/10).**
+- libdatachannel stamps every packet: EF (46) for an "audio" track, AF42 (36)
+  for any other track, AF11 (10) for every SCTP packet (`track.cpp:215-220`,
+  `sctptransport.cpp:470-475`); libjuice applies it with `setsockopt(IP_TOS /
+  IPV6_TCLASS)` before each send whose value changed.
+- **On Windows libjuice gives up without trying** (`udp.c`, « IP_TOS has been
+  intentionally broken on Windows »): the Windows host sends every packet with
+  DSCP 0. Linux and macOS hosts already mark.
+- One SCTP association carries one DSCP (usrsctp bundles chunks of several
+  streams in a packet; RFC 8837 requires it): while the video rides SCTP, the
+  host's small messages (force feedback, rumble, pongs) share its class.
+- Chrome marks only RTP it sends (`networkPriority`); our page sends none, so
+  its inputs, SACKs and RTCP leave as DF. Firefox and Safari mark nothing.
+- libjuice's socket is IPv6 dual stack (IPv4 peers through v4-mapped
+  addresses).
+
+**Windows marks a user socket after all** (`win_dscp_probe.py` on DualRTX,
+Windows 11 26200.9457, not elevated, no QoS policy; received by `tcpdump -v`
+on the UM790Pro):
+
+| Method | EF 46 asked | AF41 34 asked | CS6 48 asked |
+|---|---|---|---|
+| plain socket | 0 | 0 | 0 |
+| `setsockopt(IP_TOS)` | 46 | 34 | refused (WSAEACCES) |
+| `WSASendMsg` + `IP_TOS` per packet | 46 | 34 | refused |
+| qWAVE `QOSAddSocketToFlow` (Voice) | 56 | 56 | 56 |
+| qWAVE `QOSSetFlow(OutgoingDSCPValue)` | refused (error 5) | refused | refused |
+
+- A patch of a few lines in libjuice would make the Windows host mark like the
+  others. Bruno's decision (05/10): carry it in our copy, as the
+  moonlight-common-c fork, and draft an upstream PR (not published without
+  him). Still to check: the value changed before every packet on one socket,
+  and which option marks a dual-stack socket's v4-mapped traffic (probe cases
+  311-323).
+
+**The path keeps the mark.** The DSCP crossed DualRTX → Freebox repeater → the
+repeaters' Wi-Fi 7 link → repeater → UM790Pro unchanged (ping 2-5 ms: not
+the cable).
+
+**The Freebox's WMM** (`iw dev wlp3s0 scan`, UM790Pro's AX210): the box and
+every repeater advertise the standard client parameters, no admission control:
+VO CW 3-7 AIFSN 2 TXOP 1504 µs; VI CW 7-15 AIFSN 2 TXOP 3008 µs; BE CW
+15-1023 AIFSN 3; BK CW 15-1023 AIFSN 7. 5 GHz channel 44 at 80 MHz, 2.4 GHz
+channel 6, no 6 GHz.
+
+**On the air** (AX210 in monitor mode, channel 44, passive): the N95
+(`78:8a:86:09:57:5c`) sits on the far repeater (`3a:07:16:ec:68:b4`, -68 dBm
+from the UM790Pro). The Windows host's stream reaches it in TID 0 (best
+effort): 146 of 146 decodable frames. A household iPhone on the same repeater
+sends and receives in TID 6 (voice). Reading the Freebox's DSCP → TID table
+failed from there: marked UDP to the N95 (9 classes) gave almost no decodable
+frame (the far repeater's frames to the N95 come at high rates, beamformed).
+To do with a station near the capture.
+
+**The host's own share of a sound** (A1, `audiolog=1` with the latency flag's
+beep, `MW_LATENCY_FLAG_SOUND=click`; Windows native host DualRTX, two N95
+passes in Wi-Fi, 59 and 60 clicks):
+- every beep reached the capture; from the beep asked to the pacer tick of its
+  first loud frame: **median 28.9 / 30.2 ms, p90 34.6 / 35.4 ms**;
+- of that, ~12 ms are the render queue ahead of the beep (the beep's own
+  output stream; a game's sound has its own), the rest the WASAPI loopback
+  (delivered in 10 ms bursts) and the pacer (mean 0.84-1.08 frames queued);
+- the relay adds 0.05-0.11 ms at the median (p99 0.6-2.5 ms, a max of 54-138
+  ms once a pass), the RTP track takes the packet ~1.6 ms after the tick;
+- at 22:20-22:33 the N95's Wi-Fi was heavily loaded (click 120-139 ms, frame
+  age 220-570 ms): NetEq's buffer rose to a median of 344 / 416 ms (target
+  400-436 ms), 0.5-1.2 % of the sound concealed, 142-303 packets lost.
+
+**The audio jitter target is not a strict floor.** With `mw_audio_target=40`
+on a local client (DualRTX, Arc display): Chrome reported a target of 40 ms
+and a minimum of 20, and the buffer held 33-37 ms, no concealment. To settle
+in A2 (default 60 against `off`, per client).
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
@@ -1114,6 +1194,9 @@ What the measurements support, in order of the path:
   on Windows libjuice marks nothing. To measure before that road ships: does
   AC_VO shorten the video's wait, and does a video-sized flow in it starve the
   house's other stations, or the AP's own policing?
+  Update (05/10, §3 « DSCP on the wire and on the air »): Windows does mark a
+  user socket (EF, AF41; not CS6), only libjuice does not try; the Freebox's
+  repeaters keep the mark; their DSCP → Wi-Fi queue table is still unread.
 
 ## 7. Knobs (bench keys, off by default unless said)
 
@@ -1133,5 +1216,9 @@ Link keys go in `MW_NATIVE_TUNING` / `--tuning` of `local_matrix.py`
 | `sctpburst=<n>` | usrsctp's max burst in packets, 0 no limit; **0 by default on the Windows native host**, 10 elsewhere | `01717368`, `2ef56bfe` |
 | `sctpss=0..5` | usrsctp's stream scheduler (4 = fair bandwidth) | `0c21bd5a` |
 | `namedrops=0\|1` | name the relay's dropped delta to the encoder | `25bf8c48` |
+| `audiolog=1` | each audio packet's way through the host (pacer tick and queue, peak, relay thread, RTP track), `relay-audio-*.csv` | `1489e114` |
 
-Environment: `MW_SCTP_RTO_MIN_MS`, `MW_SCTP_SACK_DELAY_MS`.
+Environment: `MW_SCTP_RTO_MIN_MS`, `MW_SCTP_SACK_DELAY_MS`;
+`MW_LATENCY_FLAG_SOUND=click|tick` (the server's latency flag also beeps,
+`d9734962`). Page (localStorage): `mw_audio_target=<ms>|off` (`edfbfe08`);
+`mwAudio.csv()` per second of NetEq, saved by `age.py` as `<tag>.audio.csv`.

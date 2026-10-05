@@ -19,6 +19,8 @@ receiving side (tcpdump -v on a Linux box, or pktmon) tells them apart:
                            Operators only
   311-317 toggle           one socket, IP_TOS changed before every packet
                            (EF, AF41, AF11, 0 in turn), as libjuice would
+  319-323 dual             libjuice's own socket, IPv6 dual stack to a v4-mapped
+                           peer: IPV6_TCLASS (319), IP_TOS (321), both (323)
 
 usage: python win_dscp_probe.py <dest-ip> [dscp=46] [count=20] [port=9]
 Prints, per method, whether each call succeeded; the capture says the rest.
@@ -161,6 +163,43 @@ def method_toggle(ip, port, dscp, count):
     return "4 values in turn, %d setsockopt failed" % failed
 
 
+IPPROTO_IPV6 = 41
+IPV6_V6ONLY = 27
+IPV6_TCLASS = 39
+
+
+def method_dual(which):
+    """libjuice's own socket: IPv6, dual stack (IPV6_V6ONLY off), reaching an
+    IPv4 peer through its v4-mapped address. Which option marks that traffic:
+    319 IPV6_TCLASS alone, 321 IP_TOS alone, 323 both."""
+    size = {"tclass": 319, "tos": 321, "both": 323}[which]
+
+    def run(ip, port, dscp, count):
+        s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+        s.setsockopt(IPPROTO_IPV6, IPV6_V6ONLY, 0)
+        notes = []
+        if which in ("tclass", "both"):
+            try:
+                s.setsockopt(IPPROTO_IPV6, IPV6_TCLASS, dscp << 2)
+                notes.append("IPV6_TCLASS ok")
+            except OSError as e:
+                notes.append("IPV6_TCLASS failed: %s" % e)
+        if which in ("tos", "both"):
+            try:
+                s.setsockopt(IPPROTO_IP, IP_TOS, dscp << 2)
+                notes.append("IP_TOS ok")
+            except OSError as e:
+                notes.append("IP_TOS failed: %s" % e)
+        payload = (b"6" * size)[:size]
+        for _ in range(count):
+            s.sendto(payload, ("::ffff:" + ip, port))
+            time.sleep(0.01)
+        s.close()
+        return ", ".join(notes)
+
+    return run
+
+
 def qos_flow(s, ip, port):
     if not qwave:
         return None, None, "no qwave.dll"
@@ -210,7 +249,8 @@ def main():
     print("to %s:%d, DSCP %d asked, %d packets each, admin=%s" % (ip, port, dscp, count, admin))
     for name, fn in (("plain 301", method_plain), ("ip_tos 303", method_ip_tos), ("cmsg 305", method_cmsg),
                      ("qwave_type 307", method_qwave_type), ("qwave_value 309", method_qwave_value),
-                     ("toggle 311-317", method_toggle)):
+                     ("toggle 311-317", method_toggle), ("dual tclass 319", method_dual("tclass")),
+                     ("dual tos 321", method_dual("tos")), ("dual both 323", method_dual("both"))):
         try:
             note = fn(ip, port, dscp, count)
         except Exception as e:  # noqa: BLE001 — a probe reports, it does not stop
