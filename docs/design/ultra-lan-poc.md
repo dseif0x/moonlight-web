@@ -1105,6 +1105,46 @@ dans le build du produit, ni dans l'installeur.
 - **Un piège de la machine** : une couche Vulkan implicite (de capture)
   plante la création du périphérique. L'outil coupe les couches implicites.
 
+### 6.13 U3.4 : le décodeur PyroWave dans Chrome, en WebGPU (05/10/2026, soir)
+
+**Le décodeur** (`96383922`, `95c71a44`) : `frontend/js/stream/ultra/PyroWaveDecoder.js`,
+un portage en WGSL du décodeur de l'amont (MIT, en-tête et provenance dans le
+fichier), sans `subgroups`.
+- Les sommes cumulées passent par la mémoire du groupe de travail. Le même code
+  vaut donc aussi pour Safari et les mobiles.
+- Les coefficients sont dans un seul tampon f32.
+- La transformée inverse travaille par tuiles de 32×32 en mémoire partagée, en
+  une passe par niveau.
+- Le bord : l'échantillonneur miroir de l'amont, avec ses décalages, revient à
+  l'extension symétrique de JPEG 2000 sur le signal entrelacé. Le portage la
+  calcule directement.
+
+Le labo est `scripts/bench/ultra/decoder-lab.html`, avec son pilote
+`decoder_lab.py`. Il tourne dans un Chrome headless à lui, sans aucune fenêtre,
+et vise un GPU par `--use-adapter-luid`.
+
+| 1080p, 170 Mbit/s | Écart à l'oracle | Décodage GPU dans Chrome (p50) | Amont en Vulkan (dequant + iDWT) |
+|---|---|---|---|
+| RTX 5060 Ti | ≤ 1 code, 5 clips × 3 débits | 0,17 ms | 0,10 ms |
+| Arc A380 | ≤ 1 code | 1,16 ms | 0,43 ms |
+| iGPU AMD (2 CU) | ≤ 1 code | 5,1 ms | 1,3-1,7 ms |
+
+- **Le jalon est tenu** (cible : ±2 codes). La justesse est la même sur les trois
+  GPU.
+- **La vitesse est bonne sur une carte dédiée, à reprendre sur un petit GPU.**
+  Sur l'iGPU AMD, la déquantification égale l'amont (1,1 ms contre 0,6-1,0).
+  La transformée inverse, elle, coûte 4 ms contre 0,7. Ni les barrières entre
+  passes, ni les fréquences de repos, ni les contrôles de bornes de Chrome n'en
+  sont la cause. C'est le nombre d'opérations par échantillon : l'amont lit
+  4 texels d'un coup par `textureGather`, laisse le matériel faire le miroir,
+  et calcule en FP16. Ce sera la piste à suivre, à mesurer d'abord sur le 780M
+  de l'UM790Pro (12 CU), un vrai client Ultra.
+- **À regarder** : sans les contrôles de bornes de Chrome
+  (`disable_robustness`), la sortie devient fausse. Un accès hors limites
+  existe donc, et ces contrôles le masquent.
+- **La conversion en 8 bits** (0,6 ms sur l'AMD) ne sert qu'au labo. Le
+  produit dessinera directement depuis les plans f32.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
