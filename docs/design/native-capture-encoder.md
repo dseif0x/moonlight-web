@@ -6583,9 +6583,11 @@ refus ou un build sans elle.
 - La vague espacée est juste mais ne change rien tant que ce fond remplit le
   budget (17,5 contre 17,7 Mbit/s).
 
-**Reste, à Bruno** : un plancher de QP de 18 par défaut pour VA-API, comme
-NVENC et AMF. Le H.264 sur AMD passe toujours par VA-API, à 17 Mbit/s sur un
-écran fixe.
+**Le plancher de QP de VA-API** (décision de Bruno le 05/10 au soir,
+`d287dbb5`) : 18 par défaut, comme NVENC et AMF (`encode::kVaapiMinQp`).
+`vaminqp=` reste pour le banc (-1 : aucun). Au banc, ce plancher ramène le
+H.264 de 17,3 à 0,25 Mbit/s sur la page fixe ; le défaut compilé reste à
+vérifier sous Linux au prochain créneau Ubuntu.
 
 **Concrètement, pour l'utilisateur** : sous Linux avec une carte AMD récente,
 le HEVC et l'AV1 passent par Vulkan Video sans rien régler. Un bureau presque
