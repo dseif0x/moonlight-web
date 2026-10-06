@@ -508,12 +508,15 @@ def main():
                 last.get("mbps"), (last.get("spreadMs") or {}).get("p95"),
                 (last.get("extraDelayMs") or {}).get("p95")), flush=True)
         # The audio road's (aroad) repair counters since the page loaded: frames
-        # given up as lost (each followed by a forced IDR) and chunks NACKed.
+        # given up as lost (each followed by a forced IDR), chunks NACKed, whole
+        # frames asked for (none of their chunks came) and chunks asked again.
         rtp = d.eval("globalThis.__mwRtp ? JSON.stringify({lost: __mwRtp.lost || 0, "
-                     "nacked: __mwRtp.nacked || 0}) : null")
+                     "nacked: __mwRtp.nacked || 0, whole: __mwRtp.whole || 0, "
+                     "reasked: __mwRtp.reasked || 0}) : null")
         if rtp:
             data["rtp"] = json.loads(rtp)
-            print("  rtp: %(lost)s frames lost, %(nacked)s chunks NACKed" % data["rtp"], flush=True)
+            print("  rtp: %(lost)s frames lost, %(nacked)s chunks NACKed, %(whole)s whole frames "
+                  "asked, %(reasked)s asked again" % data["rtp"], flush=True)
         if load_seen:
             data["load"] = load_seen
             print("  load: " + " | ".join("%s %s fps, GPU %s ms, level %s%s" % (
