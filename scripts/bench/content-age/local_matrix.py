@@ -63,7 +63,9 @@ def launch_dev(rate, cadence, log):
         keys.append(TUNING)
     if keys:
         env["MW_NATIVE_TUNING"] = ",".join(keys)
-    subprocess.Popen([EXE, "--dev", "--log", log], env=env,
+    # --autostart: a launch by hand opens the admin page in the default
+    # browser, so each pass would leave one more tab on Bruno's screen.
+    subprocess.Popen([EXE, "--dev", "--autostart", "--log", log], env=env,
                      creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
     time.sleep(8)
 
