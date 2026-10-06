@@ -68,8 +68,12 @@ const GIVE_UP_REPAIR_MS = 40;
  * The last chunk received is named back (`ack`, every ACK_MS or ACK_BYTES): a
  * host with a send window (aroadwin=) keeps at most that much in flight past
  * it, the ack clock SCTP has and this road lacked (plan « Wi-Fi », W4).
+ * With `partBytes` (POC Ultra, decode by slices): the front of a frame still
+ * coming, in index order and with no hole, goes to the page as `part` pieces
+ * of at least that many bytes, so its decoding starts before the frame is
+ * whole; the whole frame follows as before.
  */
-function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS, repair = true) {
+function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS, repair = true, partBytes = 0) {
     const ordered = outMid === 'video';
     const tag = ordered ? 'v' : 'u';
     const open = new Map(); // seq → frame being put together
@@ -167,6 +171,25 @@ function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS, repair = true) {
         }
         if (hiSeq < 0 || after(seq, hiSeq)) hiSeq = seq;
     };
+    // The front of frame @p f that came since its last piece, as a piece.
+    const postPart = (f) => {
+        let bytes = 0;
+        let end = f.sentIdx;
+        while (end < f.parts.length && f.parts[end]) bytes += f.parts[end++].byteLength;
+        if (end === f.parts.length || bytes < partBytes) return;
+        const data = new Uint8Array(bytes);
+        let at = 0;
+        for (let k = f.sentIdx; k < end; k++) {
+            data.set(f.parts[k], at);
+            at += f.parts[k].byteLength;
+        }
+        self.postMessage(
+            { mid: outMid, part: { fid: f.fid, off: f.sentBytes }, data: data.buffer },
+            [data.buffer],
+        );
+        f.sentIdx = end;
+        f.sentBytes += bytes;
+    };
     const post = (seq, f) => {
         const data = new Uint8Array(f.bytes);
         let at = 0;
@@ -238,6 +261,8 @@ function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS, repair = true) {
                     asked: new Map(), // index → {at, tries}
                     key: (dv.getUint8(1) & 1) === 1,
                     fid: dv.getUint32(8),
+                    sentIdx: 0, // chunks given as pieces (partBytes)
+                    sentBytes: 0,
                 };
                 open.set(seq, f);
                 // A newer frame started: what an older one still lacks is lost.
@@ -251,7 +276,10 @@ function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS, repair = true) {
             }
             if (idx > f.hi + 1) ask(seq, f, f.hi + 1, idx);
             if (idx > f.hi) f.hi = idx;
-            if (f.got < count) return pump();
+            if (f.got < count) {
+                if (partBytes > 0) postPart(f);
+                return pump();
+            }
             open.delete(seq);
             f.held = -1;
             f.ts = frame.timestamp;
@@ -287,9 +315,14 @@ self.onrtctransform = (event) => {
         const repair = !(transformer.options && transformer.options.reask === false);
         if (!(transformer.options && transformer.options.giveUpMs) && repair)
             giveUpMs = GIVE_UP_REPAIR_MS;
-        audioRoad(reader, mid === 'vaudio' ? 'video' : 'ultraraw', giveUpMs, repair).catch((e) =>
-            self.postMessage({ mid, error: String(e && e.message ? e.message : e) }),
-        );
+        const partBytes = (transformer.options && transformer.options.partBytes) || 0;
+        audioRoad(
+            reader,
+            mid === 'vaudio' ? 'video' : 'ultraraw',
+            giveUpMs,
+            repair,
+            partBytes,
+        ).catch((e) => self.postMessage({ mid, error: String(e && e.message ? e.message : e) }));
         return;
     }
     const pump = () =>

@@ -149,6 +149,9 @@ export class WebRtcDataChannel {
         this.onClose = null; // Disconnected / error
         this.onError = null; // Error event
         this.onVideo = null; // (frame: Uint8Array, isKeyframe: boolean, backendTs: number)
+        // (frameId: number, offset: number, bytes: Uint8Array): the front of a
+        // frame still on the audio road (POC Ultra, decode by slices).
+        this.onVideoPart = null;
         this.onAudio = null; // (sample: Uint8Array)
         this.onStats = null; // (msg: object) stats/pong messages from backend
         this.onTakeover = null; // () session taken over by another device
@@ -862,6 +865,9 @@ export class WebRtcDataChannel {
                     onVideo: (frame, isKeyframe, backendTs, lost, frameId) =>
                         this._onRtpVideoFrame(frame, isKeyframe, backendTs, lost, frameId),
                     onUltra: (buf, arrivalMs) => this._ultra?.sink.onMessage(buf, arrivalMs),
+                    onVideoPart: (fid, off, bytes) => {
+                        if (this.connected && this.onVideoPart) this.onVideoPart(fid, off, bytes);
+                    },
                     // The audio road's missing chunks, asked again (U1.4 quater).
                     onNack: (nack) => {
                         const dc = this.dataChannels.input;

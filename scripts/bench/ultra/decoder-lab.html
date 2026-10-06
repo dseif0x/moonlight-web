@@ -27,6 +27,10 @@
       // Untimed decodes in the same submission before the timed one, so an
       // idle GPU has its clocks up: a frame stream keeps it busy too.
       const warm = Number(q.get("warm") || 0);
+      // By slices (WebGPU): each frame fed in this many pieces cut anywhere,
+      // one submission each, as UltraPlayer does on the audio road; the timed
+      // loop then times what the last piece leaves.
+      const slices = Number(q.get("slices") || 0);
       const out = document.getElementById("log");
       const log = (s) => {
         out.textContent += s + "\n";
@@ -134,15 +138,70 @@
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
         });
 
+        // A frame's packets back to back, cut in `n` pieces at byte offsets
+        // that fall inside blocks.
+        const pieces = (packets, n) => {
+          const all = new Uint8Array(packets.reduce((a, p) => a + p.length, 0));
+          let at = 0;
+          for (const p of packets) {
+            all.set(p, at);
+            at += p.length;
+          }
+          const cuts = [];
+          for (let k = 0; k < n; k++)
+            cuts.push(
+              all.subarray(
+                Math.floor((all.length * k) / n),
+                Math.floor((all.length * (k + 1)) / n),
+              ),
+            );
+          return cuts;
+        };
+        // Feeds pieces as UltraPlayer does (the cut tail of a block kept for
+        // the next piece), submitting each but the last, which is recorded
+        // into `last` (and timed by `tw`).
+        const bySlices = (cuts, last, tw) => {
+          dec.clear();
+          dec.startSlices();
+          let carry = null;
+          let ready = false;
+          for (let k = 0; k < cuts.length; k++) {
+            let data = cuts[k];
+            if (carry) {
+              data = new Uint8Array(carry.length + cuts[k].length);
+              data.set(carry);
+              data.set(cuts[k], carry.length);
+            }
+            const used = dec.pushPiece(data);
+            if (used < 0) throw new Error(`piece ${k}: malformed`);
+            carry = used < data.length ? data.slice(used) : null;
+            if (k < cuts.length - 1) {
+              const enc = device.createCommandEncoder();
+              if (dec.decodeSlice(enc)) device.queue.submit([enc.finish()]);
+            } else {
+              if (carry) throw new Error("the last piece ends inside a block");
+              ready = dec.isReady();
+              dec.decodeSlice(last, true, tw);
+            }
+          }
+          return ready;
+        };
+
         const perFrame = [];
         for (let f = 0; f < frames.length; f++) {
-          for (const p of frames[f]) {
-            if (!dec.pushPacket(p))
-              throw new Error(`frame ${f}: malformed packet`);
-          }
-          const ready = dec.isReady();
           const enc = device.createCommandEncoder();
-          dec.decode(enc);
+          let ready;
+          if (slices > 0) {
+            ready = bySlices(pieces(frames[f], slices), enc);
+            dec.decode(enc, undefined, "pack");
+          } else {
+            for (const p of frames[f]) {
+              if (!dec.pushPacket(p))
+                throw new Error(`frame ${f}: malformed packet`);
+            }
+            ready = dec.isReady();
+            dec.decode(enc);
+          }
           enc.copyBufferToBuffer(
             dec.packedBuf,
             0,
@@ -231,22 +290,24 @@
             size: 16,
             usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
           });
+          const lastCuts =
+            slices > 0 ? pieces(frames[frames.length - 1], slices) : null;
           for (let i = 0; i < timing; i++) {
             dec.decodedThisSeq = false;
             const enc = device.createCommandEncoder();
-            for (let k = 0; k < warm; k++) {
+            // (Not by slices: its pieces go before this submission, and the
+            // dispatch offset they write would be the warm decodes' too.)
+            for (let k = 0; k < (lastCuts ? 0 : warm); k++) {
               dec.decode(enc, undefined, stages);
               dec.decodedThisSeq = false;
             }
-            dec.decode(
-              enc,
-              {
-                querySet: qs,
-                beginningOfPassWriteIndex: 0,
-                endOfPassWriteIndex: 1,
-              },
-              stages,
-            );
+            const tw = {
+              querySet: qs,
+              beginningOfPassWriteIndex: 0,
+              endOfPassWriteIndex: 1,
+            };
+            if (lastCuts) bySlices(lastCuts, enc, tw);
+            else dec.decode(enc, tw, stages);
             enc.resolveQuerySet(qs, 0, 2, resolve, 0);
             enc.copyBufferToBuffer(resolve, 0, tsRead, 0, 16);
             device.queue.submit([enc.finish()]);
@@ -267,6 +328,7 @@
           ref,
           stages: stages || "all",
           warm,
+          slices,
           width: w,
           height: h,
           frames: perFrame.length,

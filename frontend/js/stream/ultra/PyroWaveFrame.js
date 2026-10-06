@@ -11,7 +11,9 @@
 // A frame is gathered here as the payload words of its 32x32 blocks, back to
 // back (`payloadCpu`), and the word offset of each block in the index order
 // of bitstream.md (`offsetsCpu`, NONE for a block that did not come). The
-// decoders upload both and do the rest on the GPU.
+// decoders upload both and do the rest on the GPU. A frame may also come in
+// pieces cut anywhere (pushPiece): the WebGPU decoder then starts on the
+// blocks already there, by slices.
 
 export const LEVELS = 5;
 export const NONE = 0xffffffff;
@@ -90,10 +92,26 @@ export class PyroWaveFrame {
         this.totalBlocks = this.blockCount;
         this.lastSeq = -1;
         this.decodedThisSeq = false;
+        // One past the highest block seen: the host sends blocks in index
+        // order, so every block below it that has not come never will.
+        this.frontier = 0;
     }
 
     /** Feeds one network packet (one or more 32x32 blocks). False on a malformed packet. */
     pushPacket(bytes) {
+        return this._parse(bytes, false) === bytes.byteLength;
+    }
+
+    /**
+     * Feeds the next bytes of a frame cut anywhere (a transport's piece, for
+     * the decode by slices): parses the whole blocks there. Returns the bytes
+     * used, the rest to come again with the next piece; -1 when malformed.
+     */
+    pushPiece(bytes) {
+        return this._parse(bytes, true);
+    }
+
+    _parse(bytes, piece) {
         const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
         let pos = 0;
         while (bytes.byteLength - pos >= 8) {
@@ -102,20 +120,21 @@ export class PyroWaveFrame {
             const seq = (w0 >>> 28) & 7;
             if (w0 >>> 31) {
                 // Start of frame: dimensions and the number of coded blocks.
-                if (!this._sequence(seq)) return true;
-                if (((w1 >>> 24) & 3) !== 0) return false;
+                if (!this._sequence(seq)) return bytes.byteLength;
+                if (((w1 >>> 24) & 3) !== 0) return -1;
                 if ((w0 & 0x3fff) + 1 !== this.width || ((w0 >>> 14) & 0x3fff) + 1 !== this.height)
-                    return false;
-                if (((w1 >>> 26) & 1) !== 0) return false; // 4:4:4 not handled here
+                    return -1;
+                if (((w1 >>> 26) & 1) !== 0) return -1; // 4:4:4 not handled here
                 this.totalBlocks = w1 & 0xffffff;
                 pos += 8;
                 continue;
             }
             const words = (w0 >>> 16) & 0xfff;
-            if (words < 2 || words * 4 > bytes.byteLength - pos) return false;
-            if (!this._sequence(seq)) return true;
+            if (words < 2) return -1;
+            if (words * 4 > bytes.byteLength - pos) return piece ? pos : -1;
+            if (!this._sequence(seq)) return bytes.byteLength;
             const block = w1 >>> 8;
-            if (block >= this.blockCount) return false;
+            if (block >= this.blockCount) return -1;
             if (this.offsetsCpu[block] === NONE) {
                 this._ensurePayload(this.payloadWords + words);
                 this.offsetsCpu[block] = this.payloadWords;
@@ -124,10 +143,11 @@ export class PyroWaveFrame {
                 new Uint8Array(this.payloadCpu.buffer, this.payloadWords * 4, words * 4).set(src);
                 this.payloadWords += words;
                 this.decodedBlocks++;
+                if (block >= this.frontier) this.frontier = block + 1;
             }
             pos += words * 4;
         }
-        return pos === bytes.byteLength;
+        return pos;
     }
 
     // False when the packet belongs to an older frame than the one in progress.

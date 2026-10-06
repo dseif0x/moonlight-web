@@ -28,6 +28,12 @@
  * frame in flight at a time: a frame that arrives while the GPU is still busy
  * with the previous one replaces any other waiting frame (the freshest wins),
  * never queues behind it.
+ *
+ * By slices (WebGPU, bench key mw_ultra_slices=1 on the audio road): the
+ * pieces of a frame still on its way come to pushPart(), and the blocks there
+ * are dequantized, and the coarse levels transformed, before the frame is
+ * whole; its last piece leaves only the rest to do. A piece missing, or a
+ * frame by slices waiting for the GPU, and the next frame comes whole.
  */
 
 import { PyroWaveDecoder } from './PyroWaveDecoder.js';
@@ -76,12 +82,18 @@ export class UltraPlayer {
         this.decoder = null;
         this._busy = false;
         this._waiting = null;
-        this.stats = { frames: 0, replaced: 0, incomplete: 0, errors: 0 };
+        this.stats = { frames: 0, replaced: 0, incomplete: 0, errors: 0, sliced: 0, parts: 0 };
+        // The frame coming by slices: its frame id, the bytes of it seen, the
+        // tail of a block cut by the transport, and whether it is all in.
+        this._slice = null;
         // Where a frame's time goes, ms: waiting for the GPU to finish the
         // previous one, parsing its packets, recording and submitting the
         // work, submit to work done, the VideoFrame made from the canvas, and
-        // the GPU's own time for the decode and the present passes.
+        // the GPU's own time for the decode and the present passes (by
+        // slices: what was left at the last piece), and a slice's own time
+        // on this thread.
         this.times = {
+            part: [],
             wait: [],
             parse: [],
             record: [],
@@ -194,30 +206,112 @@ export class UltraPlayer {
     }
 
     /**
+     * A piece of a frame still on its way (WebGPU only): @param {number} fid
+     * the host's frame id @param {number} off where the piece starts in the
+     * frame @param {Uint8Array} bytes the piece. Its whole blocks go to the
+     * GPU at once; push() brings the rest.
+     */
+    pushPart(fid, off, bytes) {
+        const dec = this.decoder;
+        if (!dec || !this.device) return;
+        let s = this._slice;
+        // A frame by slices still waits for the GPU: this one comes whole.
+        if (s && s.whole) return;
+        if (off === 0) {
+            s = this._slice = { fid, off: 0, carry: null, whole: false };
+            dec.clear();
+            dec.startSlices();
+        } else if (!s || s.fid !== fid || s.off !== off) {
+            // A piece missing (a chunk asked again, a frame given up on): whole, then.
+            this._slice = null;
+            return;
+        }
+        const t0 = performance.now();
+        if (!this._feed(s, bytes)) {
+            this.stats.errors++;
+            return;
+        }
+        const enc = this.device.createCommandEncoder();
+        if (dec.decodeSlice(enc)) this.device.queue.submit([enc.finish()]);
+        this.stats.parts++;
+        this._note('part', performance.now() - t0);
+    }
+
+    // The next bytes of the frame by slices, after the tail of a block cut
+    // last time. False (the frame then comes whole) when malformed.
+    _feed(s, bytes) {
+        let data = bytes;
+        if (s.carry) {
+            data = new Uint8Array(s.carry.length + bytes.length);
+            data.set(s.carry);
+            data.set(bytes, s.carry.length);
+        }
+        const used = this.decoder.pushPiece(data);
+        if (used < 0) {
+            this._slice = null;
+            return false;
+        }
+        s.carry = used < data.length ? data.slice(used) : null;
+        s.off += bytes.length;
+        return true;
+    }
+
+    /**
      * One frame from the host. @param {Uint8Array} bytes its packets, back to
      * back @param {number} timestamp the chunk timestamp the page tracks it by
-     * @param {number} backendTs the host's capture stamp
+     * @param {number} backendTs the host's capture stamp @param {number} [fid]
+     * the host's frame id, which pairs the frame with its pieces
      */
-    push(bytes, timestamp, backendTs) {
+    push(bytes, timestamp, backendTs, fid) {
         if (!this.decoder) return;
+        const job = { bytes, timestamp, backendTs, at: performance.now() };
+        const s = this._slice;
+        if (s && !s.whole && fid !== undefined && s.fid === fid && s.off <= bytes.length) {
+            // The rest of a frame by slices: only what it left is still to do.
+            const tp = performance.now();
+            const ok = this._feed(s, bytes.subarray(s.off));
+            this._note('parse', performance.now() - tp);
+            if (!ok || s.carry) {
+                this._slice = null;
+                this.stats.errors++;
+                return;
+            }
+            s.whole = true;
+            job.slice = s;
+            job.bytes = null;
+        }
         if (this._busy) {
-            if (this._waiting) this.stats.replaced++;
-            this._waiting = { bytes, timestamp, backendTs, at: performance.now() };
+            const old = this._waiting;
+            if (old) {
+                this.stats.replaced++;
+                // A frame by slices replaced: its blocks are no longer the ones wanted.
+                if (old.slice && this._slice === old.slice) this._slice = null;
+            }
+            this._waiting = job;
             return;
         }
         this._note('wait', 0);
-        this._run(bytes, timestamp, backendTs);
+        this._run(job);
     }
 
-    _run(bytes, timestamp, backendTs) {
+    _run(job) {
         const dec = this.decoder;
-        const tp = performance.now();
-        const parsed = dec.pushPacket(bytes);
-        this._note('parse', performance.now() - tp);
-        if (!parsed) {
-            this.stats.errors++;
-            return this._next();
+        if (job.slice) {
+            this.stats.sliced++;
+            this._slice = null;
+        } else {
+            // A whole frame: what a frame by slices had parsed goes.
+            this._slice = null;
+            dec.clear();
+            const tp = performance.now();
+            const parsed = dec.pushPacket(job.bytes);
+            this._note('parse', performance.now() - tp);
+            if (!parsed) {
+                this.stats.errors++;
+                return this._next();
+            }
         }
+        const { timestamp, backendTs } = job;
         // The whole frame came at once, so a frame short of blocks is one the
         // host sent so (packets lost before the road): decoded as it is.
         if (!dec.isReady(true)) {
@@ -236,8 +330,10 @@ export class UltraPlayer {
         const tw = (a, b) =>
             q ? { querySet: q, beginningOfPassWriteIndex: a, endOfPassWriteIndex: b } : undefined;
         // Dequantization and the inverse transform only: the present pass
-        // reads the f32 planes, the 8-bit packing is the lab's.
-        dec.decode(enc, tw(0, 1), ['dequant', 'idwt']);
+        // reads the f32 planes, the 8-bit packing is the lab's. By slices,
+        // what the last piece left of them.
+        if (job.slice) dec.decodeSlice(enc, true, tw(0, 1));
+        else dec.decode(enc, tw(0, 1), ['dequant', 'idwt']);
         dec.present(enc, this.context, this.limited, tw(2, 3));
         if (q) {
             enc.resolveQuerySet(q, 0, 4, this._queryBuf, 0);
@@ -358,7 +454,7 @@ export class UltraPlayer {
         if (!w) return;
         this._waiting = null;
         this._note('wait', performance.now() - w.at);
-        this._run(w.bytes, w.timestamp, w.backendTs);
+        this._run(w);
     }
 
     destroy() {

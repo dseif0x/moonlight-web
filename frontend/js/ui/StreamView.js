@@ -4982,6 +4982,11 @@ export class StreamView {
         if (this._transport !== 'webrtc-media') {
             this.webrtc.onVideo = (frame, isKeyframe, backendTs, frameId) =>
                 this.handleVideoFrame(frame, isKeyframe, backendTs, frameId);
+            // POC Ultra, decode by slices: the front of a frame still coming.
+            this.webrtc.onVideoPart = (frameId, offset, bytes) => {
+                if (!this._quitting && this._ultraPlayer && this._ultraMode())
+                    this._ultraPlayer.pushPart(frameId, offset, bytes);
+            };
             // Frame loss from reassembly: invalidate reference until next keyframe.
             // IDR is already requested by WebRtcDataChannel (throttled) — don't double it.
             this.webrtc.onFrameLoss = (frameId, wasKeyframe) => {
@@ -7059,7 +7064,7 @@ export class StreamView {
         // decodes it on WebGPU. Every frame stands alone: no stale-frame or
         // gap logic, no keyframe to wait for.
         if (this._ultraMode()) {
-            this._handleUltraFrame(data, backendTs, arrivalAbs);
+            this._handleUltraFrame(data, backendTs, arrivalAbs, frameId);
             return;
         }
 
@@ -11912,7 +11917,7 @@ export class StreamView {
      * header first). The player is made from the first header's size; the
      * frame it gives back takes the ordinary road from onDecodedFrame on.
      */
-    _handleUltraFrame(data, backendTs, arrivalAbs) {
+    _handleUltraFrame(data, backendTs, arrivalAbs, frameId) {
         this.stats.received++;
         if (!this._ultraPlayer) {
             if (this._ultraStarting || data.length < 8) return;
@@ -11962,7 +11967,8 @@ export class StreamView {
             key: true,
             hostTs: backendTs,
         });
-        this._ultraPlayer.push(data, ts, backendTs);
+        // The frame id pairs it with the pieces that came before it (by slices).
+        this._ultraPlayer.push(data, ts, backendTs, frameId || undefined);
     }
 
     destroy() {

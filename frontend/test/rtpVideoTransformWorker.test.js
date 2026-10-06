@@ -105,3 +105,47 @@ describe('rtpVideoTransformWorker — the audio road repair', () => {
         expect(nacks).toEqual([{ t: 'v', s: 4, i: [1] }]);
     });
 });
+
+describe('rtpVideoTransformWorker — pieces of a frame still coming (decode by slices)', () => {
+    const saved = globalThis.self;
+    afterEach(() => {
+        globalThis.self = saved;
+    });
+
+    const fill = (c, byte) => {
+        new Uint8Array(c.data, 12).fill(byte);
+        return c;
+    };
+
+    it('gives the front of a frame in pieces, never its last chunk, then the frame whole', async () => {
+        const r = await road({ partBytes: 200 });
+        r.give(fill(chunk(0, 0, 5), 1));
+        await tick(1);
+        r.give(fill(chunk(0, 1, 5), 2)); // 200 bytes in front: a piece
+        await tick(1);
+        r.give(fill(chunk(0, 3, 5), 4)); // a hole at 2: nothing more in front
+        await tick(1);
+        r.give(fill(chunk(0, 2, 5), 3)); // 2 and 3 now: a piece
+        await tick(1);
+        r.give(fill(chunk(0, 4, 5), 5)); // the last: the frame, whole
+        await tick(1);
+        const parts = r.posts.filter((p) => p.part);
+        expect(parts.map((p) => p.part)).toEqual([
+            { fid: 0, off: 0 },
+            { fid: 0, off: 200 },
+        ]);
+        expect([...new Uint8Array(parts[1].data)].filter((b, i) => i % 100 === 0)).toEqual([3, 4]);
+        const whole = r.posts.find((p) => p.data && !p.part);
+        expect(whole.data.byteLength).toBe(500);
+        await tick(10); // the ack's timer, before self goes
+    });
+
+    it('gives no piece without partBytes', async () => {
+        const r = await road({});
+        r.give(chunk(0, 0, 3));
+        r.give(chunk(0, 1, 3));
+        await tick(1);
+        expect(r.posts.some((p) => p.part)).toBe(false);
+        await tick(10);
+    });
+});

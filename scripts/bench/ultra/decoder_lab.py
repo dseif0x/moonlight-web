@@ -59,6 +59,9 @@ def main():
     ap.add_argument("--timing", type=int, default=200)
     ap.add_argument("--warm", type=int, default=0, help="untimed decodes before each timed one")
     ap.add_argument("--stages", default="", help="time one stage alone: dequant, idwt or pack")
+    ap.add_argument("--slices", type=int, default=0,
+                    help="feed each frame in this many pieces (WebGPU): checked as decoded, and the timed loop "
+                         "times what the last piece leaves")
     ap.add_argument("--chrome-arg", action="append", default=[])
     ap.add_argument("--show", action="store_true", help="print each frame's line")
     ap.add_argument("--present", action="store_true", help="check the product's presentation path once")
@@ -108,9 +111,9 @@ def main():
         for clip in a.clips.split(","):
             for mbps in a.mbps.split(","):
                 url = ("http://127.0.0.1:%d/scripts/bench/ultra/decoder-lab.html?clip=%s&mbps=%s&ref=%s"
-                       "&frames=%d&timing=%d&stages=%s&warm=%d&power=%s&present=%d&api=%s" % (http_port, clip, mbps, a.ref, a.frames, a.timing,
-                                                                    a.stages, a.warm, a.power,
-                                                                    1 if a.present else 0, a.api))
+                       "&frames=%d&timing=%d&stages=%s&warm=%d&power=%s&present=%d&api=%s&slices=%d"
+                       % (http_port, clip, mbps, a.ref, a.frames, a.timing, a.stages, a.warm, a.power,
+                          1 if a.present else 0, a.api, a.slices))
                 call("Page.navigate", url=url)
                 # A slow client (a TV) takes seconds to load the module that sets it.
                 for _ in range(120):
@@ -133,7 +136,8 @@ def main():
                 g = res.get("gpuMs") or {}
                 print("%-15s %4s Mbit/s %-7s %s  max diff Y %d C %d vs oracle (min PSNR %.1f dB), PSNR-Y vs "
                       "source %.2f dB, ready %s, GPU decode p50 %s ms p99 %s ms%s"
-                      % (clip, mbps, res.get("stages", ""), res["adapter"], res["maxDiff"], res["maxDiffC"], res["minPsnrVsOracle"],
+                      % (clip, mbps, res.get("stages", "") + (" /%d" % res["slices"] if res.get("slices") else ""),
+                         res["adapter"], res["maxDiff"], res["maxDiffC"], res["minPsnrVsOracle"],
                          res["meanPsnrVsSource"], res["allReady"],
                          "%.3f" % g["p50"] if g else "-", "%.3f" % g["p99"] if g else "-",
                          " ERRORS %s" % res["errors"] if res["errors"] else ""))

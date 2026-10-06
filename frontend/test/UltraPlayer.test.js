@@ -15,6 +15,21 @@ vi.mock('../js/stream/ultra/PyroWaveDecoder.js', () => ({
             this.pushed.push(bytes[0]);
             return bytes[0] !== 0xee;
         }
+        // A piece: every byte is a whole "block", but a last 0xcc is one cut short.
+        pushPiece(bytes) {
+            this.pieces = (this.pieces || []).concat([...bytes]);
+            return bytes[bytes.length - 1] === 0xcc ? bytes.length - 1 : bytes.length;
+        }
+        clear() {
+            this.cleared = (this.cleared || 0) + 1;
+        }
+        startSlices() {
+            this.slices = [];
+        }
+        decodeSlice(enc, last = false) {
+            this.slices.push(last ? 'last' : 'some');
+            return true;
+        }
         isReady() {
             return true;
         }
@@ -150,5 +165,62 @@ describe('UltraPlayer', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it('by slices: pieces go to the GPU as they come, the frame finishes the decode', async () => {
+        vi.stubGlobal(
+            'VideoFrame',
+            class {
+                constructor(src, { timestamp }) {
+                    this.timestamp = timestamp;
+                }
+            },
+        );
+        const { PyroWaveDecoder } = await import('../js/stream/ultra/PyroWaveDecoder.js');
+        const { p, frames, done } = player();
+        let submits = 0;
+        p.device.queue.submit = () => submits++;
+        p.decoder = new PyroWaveDecoder();
+        p.canvas = {};
+        p.context = {};
+        p.pushPart(7, 0, new Uint8Array([1, 2, 0xcc]));
+        p.pushPart(7, 3, new Uint8Array([3, 4]));
+        expect(submits).toBe(2);
+        // The cut tail comes again in front of the next piece.
+        expect(p.decoder.pieces).toEqual([1, 2, 0xcc, 0xcc, 3, 4]);
+        p.push(new Uint8Array([1, 2, 0xcc, 3, 4, 5]), 1, 10, 7);
+        expect(p.decoder.pieces.slice(-1)).toEqual([5]); // only the rest
+        expect(p.decoder.slices).toEqual(['some', 'some', 'last']);
+        expect(p.decoder.pushed).toEqual([]); // never parsed whole
+        done();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(frames).toEqual([1]);
+        expect(p.stats.sliced).toBe(1);
+    });
+
+    it('by slices: a piece missing, and the frame decodes whole', async () => {
+        vi.stubGlobal(
+            'VideoFrame',
+            class {
+                constructor(src, { timestamp }) {
+                    this.timestamp = timestamp;
+                }
+            },
+        );
+        const { PyroWaveDecoder } = await import('../js/stream/ultra/PyroWaveDecoder.js');
+        const { p, frames, done } = player();
+        p.decoder = new PyroWaveDecoder();
+        p.canvas = {};
+        p.context = {};
+        p.pushPart(8, 0, new Uint8Array([1, 2]));
+        p.pushPart(8, 5, new Uint8Array([6])); // 2..4 never came as a piece
+        p.push(new Uint8Array([9, 2, 3, 4, 5, 6, 7]), 1, 10, 8);
+        expect(p.decoder.pushed).toEqual([9]);
+        done();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(frames).toEqual([1]);
+        expect(p.stats.sliced).toBe(0);
     });
 });

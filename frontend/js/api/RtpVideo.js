@@ -80,6 +80,23 @@ export function aroadReaskOn() {
     }
 }
 
+/**
+ * The pieces the audio road gives of a PyroWave frame still coming, in bytes
+ * (POC Ultra, decode by slices): bench keys mw_ultra=pyrowave and
+ * mw_ultra_slices=1, mw_ultra_slice_kb for their size (48 KiB). 0 when off.
+ */
+export function ultraSliceBytes() {
+    try {
+        const ls = globalThis.localStorage;
+        if (ls?.getItem('mw_ultra') !== 'pyrowave' || ls?.getItem('mw_ultra_slices') !== '1')
+            return 0;
+        const kb = Number(ls.getItem('mw_ultra_slice_kb'));
+        return (Number.isFinite(kb) && kb >= 4 && kb <= 4096 ? kb : 48) * 1024;
+    } catch {
+        return 0;
+    }
+}
+
 /** Lets an audio receiver's frames through untouched, on the legacy road. */
 export function passEncodedAudio(receiver) {
     const { readable, writable } = receiver.createEncodedStreams();
@@ -124,10 +141,14 @@ function noteFrame(m) {
  * @param {RTCTrackEvent} event
  * @param {{onVideo?: function(Uint8Array, boolean, number, boolean, number=): void,
  *          onUltra?: function(ArrayBuffer, number): void,
+ *          onVideoPart?: function(number, number, Uint8Array): void,
  *          log?: function(string): void}} sinks
  * @returns {{mid: string, worker: Worker|null, stop: function(): void}}
  */
-export function attachRtpVideo(event, { onVideo, onUltra, onNack, onAck, log = console.log } = {}) {
+export function attachRtpVideo(
+    event,
+    { onVideo, onUltra, onVideoPart, onNack, onAck, log = console.log } = {},
+) {
     const mid = event.transceiver?.mid || (event.track.label === 'ultra' ? 'ultra' : 'video');
     if (!rtpVideoSupported()) {
         // Answered inactive: the host keeps the video on the DataChannel.
@@ -166,6 +187,11 @@ export function attachRtpVideo(event, { onVideo, onUltra, onNack, onAck, log = c
         }
         if (m.ack) {
             if (onAck) onAck(m.ack);
+            return;
+        }
+        // The front of a frame still coming (decode by slices): frame id, offset, bytes.
+        if (m.part) {
+            if (onVideoPart) onVideoPart(m.part.fid, m.part.off, new Uint8Array(m.data));
             return;
         }
         frames++;
@@ -210,6 +236,7 @@ export function attachRtpVideo(event, { onVideo, onUltra, onNack, onAck, log = c
             giveUpMs: aroadGiveUpMs(),
             // Said only when off: the worker repairs unless told otherwise.
             ...(aroadReaskOn() ? {} : { reask: false }),
+            ...(mid === 'vaudio' && ultraSliceBytes() ? { partBytes: ultraSliceBytes() } : {}),
         });
     }
     log('[MW-RTP] taking the frames of RTP track ' + mid + ' by Encoded Transform');

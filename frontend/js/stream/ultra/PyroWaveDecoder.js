@@ -35,6 +35,8 @@ struct BlockMeta { plane: u32, width: u32, height: u32, xy: u32 }
 @group(0) @binding(1) var<storage, read> offsets: array<u32>;
 @group(0) @binding(2) var<storage, read> metas: array<BlockMeta>;
 @group(0) @binding(3) var<storage, read_write> coef: array<f32>;
+// x: the first block of the dispatch (a slice starts past the blocks before it).
+@group(0) @binding(4) var<uniform> range: vec4u;
 
 var<workgroup> sharedOffset: u32;
 var<workgroup> planeOffsets: array<u32, 16>;
@@ -63,7 +65,7 @@ fn decodeQuant(q: u32) -> f32 {
 
 @compute @workgroup_size(128)
 fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) li: u32) {
-    let blockIndex = wg.x;
+    let blockIndex = wg.x + range.x;
     let bm = metas[blockIndex];
     if (li == 0u) { sharedOffset = offsets[blockIndex]; }
     let off = workgroupUniformLoad(&sharedOffset);
@@ -371,6 +373,8 @@ export class PyroWaveDecoder extends PyroWaveFrame {
         this.offsetsBuf = d.createBuffer({ size: this.offsetsCpu.byteLength, usage: S | C });
         this.metaBuf = d.createBuffer({ size: this.metas.byteLength, usage: S | C });
         d.queue.writeBuffer(this.metaBuf, 0, this.metas);
+        this.rangeBuf = d.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | C });
+        this._rangeFirst = 0;
         this.coefBuf = d.createBuffer({
             size: this.coefFloats * 4,
             usage: S | GPUBufferUsage.COPY_SRC,
@@ -419,7 +423,10 @@ export class PyroWaveDecoder extends PyroWaveFrame {
                 else if (level === 1 && comp !== 0) outs.push(comp === 1 ? this.outCb : this.outCr);
                 else outs.push(this.planeOf[`${level - 1},${comp},0`]);
             }
-            this.passes.push({ w, h, comps, u: [w, h, comps, 0, ...bands, ...outs, 0] });
+            // The level's bands are whole once the blocks before the next
+            // (finer) level's are: they come in that order.
+            const end = level === 0 ? this.blockCount : this.firstBlockOf[`${level - 1},0,1`];
+            this.passes.push({ w, h, comps, end, u: [w, h, comps, 0, ...bands, ...outs, 0] });
         }
         const slot = 256;
         this.uniformBuf = d.createBuffer({
@@ -462,6 +469,7 @@ export class PyroWaveDecoder extends PyroWaveFrame {
                 { binding: 1, resource: { buffer: this.offsetsBuf } },
                 { binding: 2, resource: { buffer: this.metaBuf } },
                 { binding: 3, resource: { buffer: this.coefBuf } },
+                { binding: 4, resource: { buffer: this.rangeBuf } },
             ],
         });
     }
@@ -473,6 +481,71 @@ export class PyroWaveDecoder extends PyroWaveFrame {
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
         this._bindDequant();
+        // A frame by slices uploads its payload again from the start.
+        this._sentWords = 0;
+    }
+
+    // The first block of the next dequantization dispatch, written only when it changes.
+    _setRangeFirst(first) {
+        if (first === this._rangeFirst) return;
+        this.device.queue.writeBuffer(this.rangeBuf, 0, new Uint32Array([first, 0, 0, 0]));
+        this._rangeFirst = first;
+    }
+
+    /** Starts a frame decoded by slices (after clear()): nothing of it is on the GPU yet. */
+    startSlices() {
+        this._sentWords = 0;
+        this._dequantDone = 0;
+        this._levelsDone = 0;
+    }
+
+    /**
+     * Records, for the frame coming by slices, what its blocks so far allow:
+     * the dequantization of the blocks new since the last call (every block
+     * below the frontier is settled, came or not), and the inverse wavelet of
+     * each level now whole. `last`: the frame is all there, everything left
+     * is recorded. One call per command encoder (the dispatch offset is a
+     * queue write). False when there was nothing new to record.
+     */
+    decodeSlice(encoder, last = false, timestampWrites) {
+        const d = this.device;
+        const end = last ? this.blockCount : this.frontier;
+        const from = this._dequantDone;
+        let levels = this._levelsDone;
+        while (levels < this.passes.length && this.passes[levels].end <= end) levels++;
+        if (end <= from && levels === this._levelsDone && !last) return false;
+        if (this.payloadWords > this._sentWords) {
+            d.queue.writeBuffer(
+                this.payloadBuf,
+                this._sentWords * 4,
+                this.payloadCpu,
+                this._sentWords,
+                this.payloadWords - this._sentWords,
+            );
+            this._sentWords = this.payloadWords;
+        }
+        const pass = encoder.beginComputePass(timestampWrites ? { timestampWrites } : undefined);
+        if (end > from) {
+            d.queue.writeBuffer(this.offsetsBuf, from * 4, this.offsetsCpu, from, end - from);
+            this._setRangeFirst(from);
+            pass.setPipeline(this.dequantPipe);
+            pass.setBindGroup(0, this.dequantBind);
+            pass.dispatchWorkgroups(end - from);
+            this._dequantDone = end;
+        }
+        if (levels > this._levelsDone) {
+            pass.setPipeline(this.idwtPipe);
+            for (let k = this._levelsDone; k < levels; k++) this._idwt(pass, this.passes[k]);
+            this._levelsDone = levels;
+        }
+        pass.end();
+        if (last) this.decodedThisSeq = true;
+        return true;
+    }
+
+    _idwt(pass, p) {
+        pass.setBindGroup(0, p.bind);
+        pass.dispatchWorkgroups(Math.ceil((2 * p.w) / 32), Math.ceil((2 * p.h) / 32), p.comps);
     }
 
     /**
@@ -488,20 +561,14 @@ export class PyroWaveDecoder extends PyroWaveFrame {
         d.queue.writeBuffer(this.offsetsBuf, 0, this.offsetsCpu);
         const pass = encoder.beginComputePass(timestampWrites ? { timestampWrites } : undefined);
         if (run('dequant')) {
+            this._setRangeFirst(0);
             pass.setPipeline(this.dequantPipe);
             pass.setBindGroup(0, this.dequantBind);
             pass.dispatchWorkgroups(this.blockCount);
         }
         if (run('idwt')) {
             pass.setPipeline(this.idwtPipe);
-            for (const p of this.passes) {
-                pass.setBindGroup(0, p.bind);
-                pass.dispatchWorkgroups(
-                    Math.ceil((2 * p.w) / 32),
-                    Math.ceil((2 * p.h) / 32),
-                    p.comps,
-                );
-            }
+            for (const p of this.passes) this._idwt(pass, p);
         }
         if (run('pack')) {
             pass.setPipeline(this.packPipe);
@@ -587,6 +654,7 @@ export class PyroWaveDecoder extends PyroWaveFrame {
             this.coefBuf,
             this.packedBuf,
             this.uniformBuf,
+            this.rangeBuf,
             this._presentUbo,
         ].filter(Boolean)) {
             b.destroy();
