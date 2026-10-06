@@ -1112,7 +1112,47 @@ at 12000 (about half of last night's Auto) and 24000, two rounds, arms rotated.
   - Two levers are left for the audio road: a send window against the flood
     (POC session, 89adcb0f host side, key `aroadwin=<KiB>`, off by default)
     and a longer give-up for the losses on the air (`mw_aroad_giveup=40`).
-    Neither is measured on the Mac yet.
+    Both measured the same morning, below.
+
+**Same morning: a longer give-up, then the send window.**
+
+- **A longer give-up recovers nothing.** At 12 Mbit/s, `mw_aroad_giveup=40`
+  caught 54 and 56 clicks of 60, against 56 and 57 at the default 15 ms
+  (medians 59-63 ms). The missing clicks are not a repair that comes too late.
+- **The send window** (POC session: host 89adcb0f, the page's acks 2c8ab800,
+  key `aroadwin=<KiB>`): the host keeps at most that many bytes not yet
+  acknowledged by the page. When the window stays full, it drops an older
+  delta frame. `build\` of 05:31, Auto or 24 Mbit/s, two rounds. The page's
+  counters are now kept by `pass.py` (5bd7b13b): frames given up (`lost`) and
+  chunks NACKed.
+
+| Window | Bitrate | Kernel drops | Clicks of 60 | Page lost / NACKed | Host frames dropped |
+|---|---|---|---|---|---|
+| none | Auto | 948 / 2,447 | 41 / 52 | 26 / 29, 829 / 1,634 | – |
+| none | 24 Mbit/s | 878 / 238 | 49 / 54 | 32 / 11, 369 / 175 | – |
+| 48 KiB | Auto | 0 / 157 | 12 / 12 | 67 / 51 | ≥389 / ≥230 |
+| 48 KiB | 24 Mbit/s | 0 / 0 | 11 / 29 | 24 / 30 | ≥117 / ≥126 |
+| 256 KiB | Auto | 1,012 | 45 | 23, 937 | 0 |
+| 128 KiB | Auto | 733 | 53 | 23, 708 | 12 |
+
+- **48 KiB cascades.** A full window drops a delta, the page forces an IDR,
+  the IDR is bigger than the window, and it starts again. The host counts in
+  flight everything not yet acknowledged, the ack path included (up to 5 ms
+  or 16 KiB of throttle, the page thread, SCTP upstream). At ~15 ms of ack
+  loop, 48 KiB caps the road near 26 Mbit/s. W1 bis's 48 KB was what sits in
+  Chrome's socket, not what the host has in flight.
+- **128-256 KiB stops the cascade but no longer protects the socket.** Kernel
+  drops come back to the witness's level (733-1,012). No fixed host-side size
+  both carries Auto's rate and keeps Chrome's socket short.
+- **The clicks are lost to give-ups.** Without a window, the missing clicks
+  follow the frames the page gives up (6-19 missing for 11-32 lost a pass),
+  despite hundreds of NACKs. A chunk NACKed once is never asked again: if the
+  NACK or the resend is lost, the frame waits until the give-up.
+- **Next, on the POC side:** a second NACK after about one RTT for a chunk
+  already asked; a window measured in what Chrome holds, or one that shrinks
+  on the page's losses. Off by default until measured on the Mac.
+- The witness passes at 24 Mbit/s dropped 238-878 here, against 72-122 an hour
+  earlier on the older build: the Wi-Fi varies that much from pass to pass.
 
 ### 05/10/2026 — DSCP on the wire and on the air, and the host's share of a sound (audio + DSCP plan, D0 and A1)
 
