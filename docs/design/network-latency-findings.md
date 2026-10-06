@@ -1154,6 +1154,46 @@ at 12000 (about half of last night's Auto) and 24000, two rounds, arms rotated.
 - The witness passes at 24 Mbit/s dropped 238-878 here, against 72-122 an hour
   earlier on the older build: the Wi-Fi varies that much from pass to pass.
 
+**Same morning: the audio road's repair (06:24-07:08).** The POC session
+found why frames were given up. The page could only NACK a frame it had
+opened, i.e. one with at least one chunk arrived. A small delta frame is 1-2
+chunks: lose them on the air and the page sees only a hole in the sequence,
+never asks for it, and gives the frame up. That also explains why a longer
+give-up changed nothing. Counters added to `pass.py` (c8579820): `whole`
+(whole frames asked) and `reasked`. The witness is localStorage
+`mw_aroad_reask=0`.
+
+- **v1** (host e023c404, page 41a3b301): every hole asked whole, every
+  missing chunk asked again twice, 8 ms apart; give-up 30 ms.
+- **v2** (host 9157fd29: resends capped at 20% of what the road sent over the
+  last 100 ms, 16 KiB floor; page 079b3c1f): only a hole of 1-2 frames asked
+  whole, once; a chunk asked again once, after 20 ms; give-up 40 ms.
+
+| Arm | Bitrate | Kernel drops | Clicks of 60 | Median, ms | Lost / whole / reasked |
+|---|---|---|---|---|---|
+| v1 | 24 Mbit/s | 164 / 808 | 59 / 56 | 67.8 / 67.1 | 2 / 7 / 136, 4 / 6 / 863 |
+| witness | 24 Mbit/s | 154 / 442 | 50 / 52 | 77.2 / 74.7 | 5, 11 |
+| v1 | Auto | 14,053 / 14,890 | 52 / 54 | 74.4 / 65.6 | 66 / 461 / 10,810, 35 / 397 / 11,574 |
+| witness | Auto | 1,829 / 3,670 | 50 / 30 | 66.7 / 63.9 | 40, 31 |
+| v2 | Auto | 3,767 / 2,850 | 54 / 50 | 72.6 / 72.2 | 15 / 18 / 2,292, 17 / 16 / 1,872 |
+| witness (v2 build) | Auto | 2,604 / 1,703 | 34 / 40 | 73.1 / 65.9 | 28, 84 |
+
+- **The repair wins the clicks.** At 24 Mbit/s, 59 and 56 of 60, SCTP's
+  level, against 50 and 52. At Auto, v2 catches 54 and 50 against 34 and 40.
+  The witness's `lost` undercounts its missing clicks: a frame lost whole was
+  never counted.
+- **v1 storms at Auto.** Every resend lands in a socket that is already
+  full, is dropped, and is asked again: ~14,000 kernel drops and ~23,000
+  chunks resent a pass.
+- **v2 stops the storm, but not all the cost.** The budget refused 2,774
+  resends against 1,605 sent in its second pass. Kernel drops are still 1.45
+  to 1.67 times the witness's.
+- **What it means:** with v2, the audio road on a Mac in Wi-Fi gets close to
+  SCTP's clicks (50-54 at Auto, 56-59 at 24 Mbit/s with v1), at ~66-73 ms. A
+  smaller budget (10-15%) may trim the extra drops; it is to be measured at the
+  next Mac slot. Whether v2 is the default inside the audio road is the POC
+  session's call; the audio road itself is not the default road.
+
 ### 05/10/2026 — DSCP on the wire and on the air, and the host's share of a sound (audio + DSCP plan, D0 and A1)
 
 Plan « le son et la priorité des paquets », session moonlight-web-da. Tools in
