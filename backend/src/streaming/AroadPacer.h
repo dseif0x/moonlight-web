@@ -183,6 +183,9 @@ public:
 
     int64_t refused() const { return m_Refused; }
 
+    /// The share, set before the road sends (bench key aroadbudget=).
+    void setShare(double share) { m_Share = share; }
+
 private:
     // Two periods: the cap follows the last full one and the one under way.
     void roll(int64_t nowUs)
@@ -200,7 +203,7 @@ private:
         }
     }
 
-    const double m_Share;
+    double m_Share;
     const int64_t m_Floor;
     int64_t m_StartUs = 0;
     int64_t m_Sent = 0, m_PrevSent = 0, m_Resent = 0;

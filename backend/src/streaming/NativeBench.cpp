@@ -170,6 +170,8 @@ const char* const kUsage =
     "                              50 Mbit/s at least; 0 = a frame in one run (default 0)\n"
     "  aroadwin=<KiB>              the audio road's send window: at most this much sent and\n"
     "                              not yet acknowledged by the page (default: none)\n"
+    "  aroadbudget=<%>             the audio road's resends: at most this share of what it\n"
+    "                              first sent over the last 100 ms (default 20)\n"
     "  rc12=driver|qp              D3D12 Video Encode's rate control; qp = the in-house one\n"
     "  reencode=0|1                in-house rate control: a picture far over its budget is\n"
     "                              coded again, at the QP that fits it (1); 0 sends it as is\n"
@@ -554,6 +556,9 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
     } else if (key == "aroadwin") {
         tuning.aroadWindowKb = value.toInt(&ok);
         ok = ok && tuning.aroadWindowKb >= 1 && tuning.aroadWindowKb <= 65536;
+    } else if (key == "aroadbudget") {
+        tuning.aroadBudgetPct = value.toInt(&ok);
+        ok = ok && tuning.aroadBudgetPct >= 1 && tuning.aroadBudgetPct <= 100;
     } else if (key == "ultrambps") {
         tuning.ultraMbps = value.toInt(&ok);
         ok = ok && tuning.ultraMbps >= 1 && tuning.ultraMbps <= 2000;

@@ -855,6 +855,12 @@ void DataChannelRelay::setLinkBench(const mw::native::EncoderTuning& tuning)
     m_UltraUnordered = tuning.ultraUnordered;
     m_AroadPace = tuning.aroadPace;
     m_AroadWindowKb = tuning.aroadWindowKb;
+    if (tuning.aroadBudgetPct > 0) {
+        std::lock_guard<std::mutex> budget(m_AroadBudgetMutex);
+        m_AroadBudget.setShare(tuning.aroadBudgetPct / 100.0);
+        qInfo() << "[DataChannelRelay] audio road resends:" << tuning.aroadBudgetPct
+                << "% of what it sent (aroadbudget=)";
+    }
     m_PaceMultiple = tuning.paceMultiple;
     m_PaceBurstKb = tuning.paceBurstKb;
     m_SctpBufferKb = tuning.sctpBufferKb;

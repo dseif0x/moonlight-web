@@ -407,7 +407,8 @@ private:
     int m_AroadWindowKb = 0;
     int64_t m_AroadAcks = 0;
     std::atomic<int64_t> m_AroadSent{0}, m_AroadResent{0};
-    // The resends' budget (AroadPacer.h): a fifth of what the road sent.
+    // The resends' budget (AroadPacer.h): a fifth of what the road sent,
+    // another share with the bench key aroadbudget=.
     std::mutex m_AroadBudgetMutex;
     AroadResendBudget m_AroadBudget{0.2, 16 * 1024};
     int64_t m_LinkAroadSent = 0, m_LinkAroadResent = 0;
