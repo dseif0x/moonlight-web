@@ -1678,8 +1678,33 @@ l'image entière pour commencer (`2e3c70a3`).
 - Pour descendre sous ce plancher, l'hôte devrait entrelacer les rangées de
   blocs des trois bandes du niveau fin. La page pourrait alors inverser ce
   niveau par bandes horizontales.
-- Reste la passe de bout en bout sur le câble, par tranches contre image
-  entière, pour voir ce que l'écran en tire.
+
+**Sur le câble (23:32-23:49).** Même banc qu'au §6.20 : la RTX encode,
+l'écran virtuel est en 2560×1440 à 120 Hz, le flux à 120 i/s, la route audio
+le transporte, et l'UM790Pro est le client. Six passes alternées, par
+tranches (`sl1`) contre image entière (`sl0`), 60 clics chacune
+(`scratchpad/pwslice_run.sh`, `pwslice_report.py`).
+
+| Médianes | Image entière (3 passes) | Par tranches (3 passes) |
+|---|---|---|
+| Images décodées par tranches | 0 % | 98 % (~3 morceaux par image) |
+| GPU restant à l'arrivée de l'image | 1,77 ms | 1,44 ms |
+| Envoi → fin du GPU | 4,1-4,5 ms | 3,7-4,4 ms |
+| Hôte → dessin (p90) | 10,3-10,8 ms (12,7-13,0) | 9,3-10,0 ms (11,6-12,5) |
+| Clic, ~173 clics réunis (p90) | 31,9 ms (41,1) | 34,3 ms (41,8) |
+| Images répétées par minute | 504-586 | 474-678 |
+
+- **Le gain est réel mais petit** : −0,7 ms de l'hôte au dessin, à chaque
+  passe. À 120 i/s, une image ne fait que ~180 Ko, soit trois morceaux de
+  48 Kio. Et le dernier, avec le niveau le plus fin, reste à faire à
+  l'arrivée.
+- **Le clic ne le voit pas.** Il est même 2,4 ms plus haut en médiane, mais
+  son p90 est égal. C'est dans le bruit relevé au §6.20 (31 à 42 ms d'une
+  passe à l'autre) : rien n'explique un recul de 2 ms quand l'hôte → dessin
+  gagne 0,7 ms.
+- **La clé reste éteinte par défaut.** Une seconde moitié rendrait le gain
+  visible : que l'hôte entrelace les rangées du niveau fin, et que la page
+  inverse ce niveau par bandes horizontales.
 
 ## 7. Concrètement, pour l'utilisateur
 
