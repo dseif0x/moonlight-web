@@ -1627,6 +1627,12 @@ au GPU de PC sans WebGPU (il tient 120 i/s sur le 780M, §6.21). Le mode Ultra
 étant à activer à la main, l'image fausse sur Mali ne touche aucun
 utilisateur.
 
+**La Mi TV (22:45), même GPU.** Le même labo dans son TV Bro (MT5867, une
+autre Mali-G31, pas d'adaptateur WebGPU non plus) donne la même image fausse
+(PSNR 9-10 dB sur le dégradé, le jeu et le texte) et **~627 ms par image
+1080p** (p50), soit 1,6 i/s. Le verdict vaut donc pour les deux TV du banc :
+PyroWave reste un codec de PC, et les TV gardent le HEVC.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
