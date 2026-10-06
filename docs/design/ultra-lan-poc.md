@@ -1633,6 +1633,17 @@ autre Mali-G31, pas d'adaptateur WebGPU non plus) donne la même image fausse
 1080p** (p50), soit 1,6 i/s. Le verdict vaut donc pour les deux TV du banc :
 PyroWave reste un codec de PC, et les TV gardent le HEVC.
 
+**L'iPhone 13 Pro (23:15), lui, décode juste et vite.** Safari d'iOS 26.5 a
+un adaptateur WebGPU (« apple », minuteur GPU compris), et le décodeur
+principal y tourne sans repli : écart 1 avec la référence (PSNR ≥ 65 dB),
+**4,8 ms de GPU par image 1080p** (p50, 7,7 au p99 ; clip `game10-1080p`,
+170 Mbit/s, GPU froid). C'est l'ordre du 780M au même régime (3,15 ms à
+60 i/s, §6.20), sous les 8,3 ms d'une image à 120 i/s. La page était servie
+par `tailscale serve` (HTTPS du réseau privé ; elle affiche désormais aussi
+ses erreurs, faute de DevTools sur un téléphone). Le décodage n'est donc pas
+l'obstacle sur un iPhone ; le débit l'est, PyroWave restant réservé à
+l'Ethernet.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et

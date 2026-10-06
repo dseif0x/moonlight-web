@@ -494,9 +494,11 @@
       }
 
       window.__labResult = (q.get("api") === "webgl2" ? runGL() : run()).catch(
-        (e) => ({
-          error: String((e && e.stack) || e),
-        }),
+        (e) => {
+          // On screen too: a phone has no DevTools to read it from.
+          log(`error: ${(e && e.stack) || e}`);
+          return { error: String((e && e.stack) || e) };
+        },
       );
       window.__labResult.then((r) => {
         window.__labDone = r;
