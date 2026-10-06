@@ -155,6 +155,20 @@ if command -v appstreamcli >/dev/null 2>&1; then
         || echo "warning: AppStream validation reported issues (not fatal)"
 fi
 
+# In-app updates without a password (SelfUpdater's "repo" path): a root helper
+# that upgrades the package from its signed repository, the polkit action that
+# lets the active session run it without one, and the repository's public key
+# for the postinst to configure that repository. Production only — the DEV
+# edition is not in the repository and never updates itself.
+if [ "$EDITION" = prod ]; then
+    install -m 0755 "$(dirname "$0")/moonlightweb-update" "$PKG$PREFIX/bin/moonlightweb-update"
+    mkdir -p "$PKG/usr/share/polkit-1/actions" "$PKG$PREFIX/share/keys"
+    install -m 0644 "$(dirname "$0")/top.moonlightweb.update.policy" \
+        "$PKG/usr/share/polkit-1/actions/top.moonlightweb.update.policy"
+    install -m 0644 "$(dirname "$0")/moonlightweb-repo.gpg" "$PKG$PREFIX/share/keys/moonlightweb.gpg"
+    install -m 0644 "$(dirname "$0")/moonlightweb-repo.asc" "$PKG$PREFIX/share/keys/moonlightweb.asc"
+fi
+
 # Post-install / pre-remove hooks shared by both package formats.
 cat > "$ROOT/postinst.sh" <<'EOF'
 #!/bin/sh
@@ -234,6 +248,49 @@ if [ -n "$MEDIA_RANGE" ]; then
                 echo "# stream media ports ($MEDIA_RANGE) out as ephemeral ports. Removed with it."
                 echo "$key = $(sysctl -n "$key")"
             } > /etc/sysctl.d/60-moonlightweb.conf 2>/dev/null || true
+        fi
+    fi
+fi
+
+# The package's own signed repository, added when none is configured — the way
+# Chrome's package adds Google's. A .deb or .rpm installed by hand then gets its
+# updates the same way as one installed from the repository: through the
+# system's updater, and through the app itself without a password (the update
+# helper only upgrades from here). Written exactly as install.sh writes it, so
+# either one finds the other's files in place. The key comes from the package,
+# not the network. Empty in the DEV edition, which is not in the repository.
+REPO_KEYS=/opt/moonlightweb/share/keys
+REPO_URL=https://packages.moonlightweb.top
+if [ -n "$REPO_KEYS" ] && [ -d "$REPO_KEYS" ]; then
+    if command -v apt-get >/dev/null 2>&1 && [ -d /etc/apt/sources.list.d ]; then
+        if [ ! -s /etc/apt/sources.list.d/moonlightweb.sources ]; then
+            install -d -m 0755 /etc/apt/keyrings
+            install -m 0644 "$REPO_KEYS/moonlightweb.gpg" /etc/apt/keyrings/moonlightweb.gpg
+            cat > /etc/apt/sources.list.d/moonlightweb.sources <<SOURCES
+Types: deb
+URIs: $REPO_URL/deb
+Suites: stable
+Components: main
+Architectures: amd64
+Signed-By: /etc/apt/keyrings/moonlightweb.gpg
+SOURCES
+        fi
+    else
+        repo_dir=""
+        [ -d /etc/yum.repos.d ] && repo_dir=/etc/yum.repos.d
+        [ -d /etc/zypp/repos.d ] && repo_dir=/etc/zypp/repos.d
+        if [ -n "$repo_dir" ] && [ ! -s "$repo_dir/moonlightweb.repo" ]; then
+            install -d -m 0755 /etc/pki/rpm-gpg
+            install -m 0644 "$REPO_KEYS/moonlightweb.asc" /etc/pki/rpm-gpg/RPM-GPG-KEY-moonlightweb
+            cat > "$repo_dir/moonlightweb.repo" <<REPO
+[moonlightweb]
+name=MoonlightWeb
+baseurl=$REPO_URL/rpm
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-moonlightweb
+REPO
         fi
     fi
 fi
@@ -383,6 +440,15 @@ if [ "${1:-}" != "upgrade" ] && [ "${1:-0}" != "1" ]; then
         done
     fi
 
+    # The repository postinst added (production only; see there). Left on an
+    # upgrade, which needs it; taken away with the package.
+    REPO_KEYS=/opt/moonlightweb/share/keys
+    if [ -n "$REPO_KEYS" ]; then
+        rm -f /etc/apt/sources.list.d/moonlightweb.sources /etc/apt/keyrings/moonlightweb.gpg \
+              /etc/yum.repos.d/moonlightweb.repo /etc/zypp/repos.d/moonlightweb.repo \
+              /etc/pki/rpm-gpg/RPM-GPG-KEY-moonlightweb
+    fi
+
     # Give the media block back to the kernel's ephemeral ports (see postinst).
     MEDIA_RANGE=48550-48573
     if [ -n "$MEDIA_RANGE" ] && [ -f /etc/sysctl.d/60-moonlightweb.conf ]; then
@@ -404,6 +470,7 @@ if [ "$EDITION" = dev ]; then
            -e "s|moonlightweb\.service|$NAME.service|g" \
            -e "s|443/tcp 80/tcp 48550:48573/udp|$PORTS|g" \
            -e "s|^\( *\)MEDIA_RANGE=.*|\1MEDIA_RANGE=|" \
+           -e "s|^\( *\)REPO_KEYS=.*|\1REPO_KEYS=|" \
            -e "s|moonlightweb --|$NAME --|g" \
            -e "s|enable --now moonlightweb\$|enable --now $NAME|" \
            -e "s|the moonlightweb service|the $NAME service|" \

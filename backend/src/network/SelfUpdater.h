@@ -47,7 +47,10 @@ class UpdateChecker;
  *            plant an executable that we would then run elevated).
  *            Fallback: launch the installer directly → UAC on the host desktop.
  *   Linux    AppImage → replace the file in place, no root at all. Running as
- *            root (systemd system unit) → dpkg/rpm directly.
+ *            root (systemd system unit) → dpkg/rpm directly. A .deb/.rpm of
+ *            the production edition → its root helper upgrades it from our
+ *            signed repository, through a polkit action the package grants
+ *            to the active session without a password.
  *            Fallback: pkexec → polkit prompt on the host desktop.
  *   macOS    bundle owned by the user (the .pkg's postinstall hands it over)
  *            → unpack the .pkg, check the app's signature against ours, copy
@@ -109,6 +112,8 @@ private:
     // last check. Refetch and replay the download once; true when that is under
     // way (the caller must return), false when it is not worth trying again.
     bool retryOnStaleMetadata(const QString& reason);
+    // Installing state, pseudo-progress, then runInstaller().
+    void startInstallPhase();
     void runInstaller();
     void onInstallerFinished(int exitCode, bool crashed);
     void armWatchdog();
@@ -141,7 +146,7 @@ private:
     static QString stagedFileName(const QString& assetName);
 
     // Preferred elevation path for this machine ("scheduled-task", "service",
-    // "appimage", "bundle", "root", "direct", "pkexec", "osascript"). Empty when the
+    // "appimage", "bundle", "repo", "root", "direct", "pkexec", "osascript"). Empty when the
     // platform has no unattended path at all.
     static QString elevationMethod();
     static bool methodNeedsHostConfirmation(const QString& method);

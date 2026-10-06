@@ -150,6 +150,31 @@ bool runningInContainer()
     const QByteArray content = cgroup.readAll();
     return content.contains("docker") || content.contains("lxc") || content.contains("containerd");
 }
+
+// The root helper the .deb/.rpm ships next to the binary (production only):
+// it upgrades the package from its own signed repository and takes no
+// argument, so the polkit rule that lets the active session run it without a
+// password lets it do that and nothing else.
+QString repoHelperPath()
+{
+    return QCoreApplication::applicationDirPath() + QStringLiteral("/moonlightweb-update");
+}
+
+// Everything the "repo" path needs, all put there by the package's postinst:
+// the helper, the polkit action that waives the password for it, pkexec to
+// call it, and the repository it upgrades from.
+bool repoUpdateReady()
+{
+    const QFileInfo helper(repoHelperPath());
+    if (!helper.isFile() || !helper.isExecutable()) return false;
+    if (!QFile::exists(
+            QStringLiteral("/usr/share/polkit-1/actions/top.moonlightweb.update.policy")))
+        return false;
+    if (QStandardPaths::findExecutable(QStringLiteral("pkexec")).isEmpty()) return false;
+    return QFile::exists(QStringLiteral("/etc/apt/sources.list.d/moonlightweb.sources")) ||
+           QFile::exists(QStringLiteral("/etc/yum.repos.d/moonlightweb.repo")) ||
+           QFile::exists(QStringLiteral("/etc/zypp/repos.d/moonlightweb.repo"));
+}
 #endif // Q_OS_MACOS
 #endif
 
@@ -242,6 +267,9 @@ QString SelfUpdater::elevationMethod()
         // privilege at all, which makes it the only always-silent path on Linux.
         if (!qEnvironmentVariableIsEmpty("APPIMAGE")) return QStringLiteral("appimage");
         if (runningAsRoot()) return QStringLiteral("root");
+        // A package from our repository, upgraded by the helper polkit lets
+        // the active session run without a password.
+        if (repoUpdateReady()) return QStringLiteral("repo");
         if (!QStandardPaths::findExecutable(QStringLiteral("pkexec")).isEmpty())
             return QStringLiteral("pkexec"); // polkit prompt on the host desktop
         return QString();
@@ -307,6 +335,18 @@ QString SelfUpdater::beginDownload()
 {
     const QJsonObject info = m_checker->statusJson();
     if (!info.value("update_available").toBool()) return QStringLiteral("No update available");
+#if !defined(Q_OS_WIN) && !defined(Q_OS_MACOS)
+    // Nothing to download: the helper takes the package from the repository,
+    // where apt or dnf checks its signature. The repository is built from the
+    // very release the checker reports, so it holds that version.
+    if (m_method == QLatin1String("repo")) {
+        m_target = info.value("latest").toString();
+        m_pkgPath.clear();
+        m_error.clear();
+        startInstallPhase();
+        return {};
+    }
+#endif
     // An empty asset_name means UpdateChecker fell back to the release page:
     // there is no installer to run for this OS/arch.
     const QString assetName = info.value("asset_name").toString();
@@ -407,6 +447,11 @@ void SelfUpdater::onDownloadFinished()
         return;
     }
 
+    startInstallPhase();
+}
+
+void SelfUpdater::startInstallPhase()
+{
     m_state = State::Installing;
     m_percent = kDownloadShare;
     m_installElapsedMs = 0;
@@ -647,7 +692,12 @@ void SelfUpdater::runInstaller()
                                                   "privileges")
                                        .arg(cmd)));
 #else
-    if (m_method == QLatin1String("appimage")) {
+    if (m_method == QLatin1String("repo")) {
+        // pkexec, but against our own polkit action: no prompt. Logged, since
+        // apt's output is the only account of an upgrade that went wrong.
+        install = QStringLiteral("pkexec %1 >>%2 2>&1")
+                      .arg(shQuote(repoHelperPath()), shQuote(installerLogPath()));
+    } else if (m_method == QLatin1String("appimage")) {
         // Replace the AppImage in place — no privilege needed, and rename() over
         // a running AppImage is safe (the mounted image keeps the old inode).
         const QString target = shQuote(qEnvironmentVariable("APPIMAGE"));
@@ -684,7 +734,17 @@ bool SelfUpdater::launchDetached(const QString& install)
     // code path and goes through the app's own single-instance logic. With the
     // settings file it was started on: without --config the updated server
     // would come back on the default one.
-    QString relaunch = shQuote(QCoreApplication::applicationFilePath());
+    QString exe = QCoreApplication::applicationFilePath();
+#if !defined(Q_OS_MACOS)
+    // A package starts us through moonlightweb-launch, which carries the
+    // capabilities the screen capture needs; the binary alone would come back
+    // unable to capture. (An AppImage has no launcher and relaunches itself.)
+    const QString launcher =
+        QCoreApplication::applicationDirPath() + QStringLiteral("/moonlightweb-launch");
+    if (qEnvironmentVariableIsEmpty("APPIMAGE") && QFileInfo(launcher).isExecutable())
+        exe = launcher;
+#endif
+    QString relaunch = shQuote(exe);
     if (!AppSettings::fileOverride().isEmpty())
         relaunch += QStringLiteral(" --config ") + shQuote(AppSettings::fileOverride());
 
