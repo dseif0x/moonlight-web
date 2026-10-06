@@ -1601,6 +1601,32 @@ SwiftShader d'abord (la règle « WARP d'abord ») : juste, 270 ms par image.
 veille profonde par la TV (HDMI-CEC). Prochaine étape dès qu'elle est
 rallumée : le repli sur la Mali-G31.
 
+### 6.22 Le repli WebGL2 sur la Freebox : faux, et 400 ms par image (06/10/2026, 22:15)
+
+Le labo du décodeur (`decoder_lab.py --api webgl2 --remote-cdp`) a tourné dans
+TV Bro, sur la Mali-G31 de la Freebox Player POP (WebGL2, `EXT_color_buffer_float`,
+pas de minuteur GPU). La box est sur son port Ethernet.
+
+- **Compilation.** Le compilateur GLSL du Mali refusait la passe des signes
+  (« no default precision defined for variable 'float[8]' » : un constructeur
+  de tableau, malgré `precision highp float`). Elle remplit désormais son
+  tableau élément par élément (`0753ba4a`). Le résultat est inchangé sur la
+  RTX et en SwiftShader (écart 1 avec la référence, 3 au présent).
+- **Exactitude.** Sur la Mali, l'image est fausse sur tous les clips essayés,
+  même le dégradé : écart jusqu'à 255, PSNR ~10 dB contre la référence. La
+  cause n'est pas cherchée (les limites lues sont suffisantes : 4 cibles,
+  textures de 4096, flottants et entiers 32 bits).
+- **Vitesse.** Décodage + présentation + lecture d'un pixel : **~405 ms par
+  image 1080p** (p50 sur trois clips), soit 2,5 i/s. C'est cinquante fois trop
+  lent pour 120 i/s, et vingt-cinq fois pour 60.
+
+Verdict : **PyroWave ne vaut pas pour la Freebox**, même avec un repli juste.
+Son GPU n'a ni WebGPU ni la puissance de calcul ; HEVC, décodé par le circuit
+de la box, reste sa voie. Le repli WebGL2 garde son intérêt pour un client
+au GPU de PC sans WebGPU (il tient 120 i/s sur le 780M, §6.21). Le mode Ultra
+étant à activer à la main, l'image fausse sur Mali ne touche aucun
+utilisateur.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
