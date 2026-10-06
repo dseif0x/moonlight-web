@@ -1357,6 +1357,41 @@ L'Auto monte à 120 i/s et bat l'Ultra forcé de 4-5 ms.
   pertes, et ne retient rien comme la piste vidéo.
 - Reste à comprendre la passe à 350 Kio.
 
+### 6.17 PyroWave de bout en bout, contre HEVC, sur le câble (06/10/2026, 18:30-19:15)
+
+Même banc qu'au §6.16 : l'hôte DualRTX encode sur la RTX, l'écran virtuel du
+produit est en 2560×1440 à 120 Hz, le flux à 60 i/s, et le client est
+l'UM790Pro sur le câble. PyroWave passe par les clés du §6.15 :
+`pipeline=d3d12,enc12=pyrowave` côté hôte, `mw_ultra=pyrowave` côté page. Il
+envoie des images de ~354 Ko, soit ~155 Mbit/s. La série compte deux manches
+alternées et 30 clics par passe (`scratchpad/pw_run.sh`, noms `u14p-*`).
+
+| Médianes | HEVC, route audio | PyroWave, route audio | HEVC, SCTP | PyroWave, SCTP |
+|---|---|---|---|---|
+| Hôte → dessin | 7,2 / 7,2 ms | 15,9 / 15,7 ms | 7,0 / 7,1 ms | 17,6 / 15,9 ms |
+| Clic | 42,9 / 41,2 ms | 48,2 / 48,3 ms | 42,7 / 42,0 ms | 54,8 / 51,2 ms |
+| Âge montré | 25,6 / 25,7 ms | 35,3 / 26,1 ms | 25,4 / 8,9 ms | 35,9 / 26,3 ms |
+| Images dessinées par seconde | 59,9 | 60 / 59,9 | 60 | 60 |
+
+- PyroWave marche sur les deux routes, sans perte et à 60 i/s. Il coûte
+  pourtant ~9 ms de plus que HEVC de l'hôte au dessin, et 6-10 ms de plus au
+  clic.
+- L'âge montré dépend de la phase de l'écran : il varie de 9 à 26 ms d'une
+  manche à l'autre pour le même HEVC. Il ne départage pas les deux codecs ici.
+- **La piste vidéo RTP ne porte pas PyroWave** (deux passes, aucune
+  enregistrée). L'hôte y emballe l'image comme du HEVC : il la découpe aux
+  codes de début de NAL. Le flux d'ondelettes contient de faux codes de début,
+  et l'hôte les coupe (`[HEVC-PATCH] NAL[0..19]` sur un même paquet). Il
+  faudrait un emballage propre à PyroWave. La route audio fait déjà mieux que
+  cette piste en HEVC (piste vidéo : 22 ms de l'hôte au dessin).
+- Piège du banc : `mw_ultra=pyrowave` reste dans le profil du Chrome de banc
+  d'une passe à l'autre. Une passe HEVC qui suit doit poser `mw_ultra=off`,
+  sinon la page lit du HEVC comme du PyroWave et ne dessine rien.
+
+Reste à expliquer les ~9 ms : le temps d'encodage sur la RTX, le décodage
+WebGPU sur la 780M, la taille des images, ou le chemin de présentation de
+`UltraPlayer`.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
