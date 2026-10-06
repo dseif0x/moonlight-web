@@ -75,7 +75,15 @@ Windows client, with no camera and no microphone.
 - On the N95 in loaded Wi-Fi (05/10/2026), 17 beeps of 60 were heard, at full
   level when heard, while NetEq held 380 ms: a pure tone may be what its time
   stretching shortens when it catches up. `MW_LATENCY_BEEP=noise` on the host
-  plays white noise instead, to compare.
+  plays white noise instead, to compare. 06/10: no better (tone 19 of 60,
+  noise 12 of 60, NetEq at 300-330 ms), while the host captured and sent all
+  60 and the client's WAV holds only the heard ones, at full level: the
+  missing beeps are not played at all. The page now logs the packets NetEq
+  discarded, its flushes and the energy it played (`mwAudio.csv()`), to place
+  the loss.
+- `sound_offset.py <listener output>` pairs the streamed `flag`/`beep` onsets
+  again with a wider window (-100 to +900 ms): the tool's own ±250 ms misses
+  a sound that trails its picture by a grown jitter buffer.
 - **Counted**: the click's send to this machine's mixer (the loopback tap): the
   way up, the host's input, its beep through its mixer and loopback capture,
   the pacer, Opus, the relay, the network, the browser's jitter buffer and

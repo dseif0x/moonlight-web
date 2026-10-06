@@ -60,6 +60,8 @@ describe('AudioStatsSampler', () => {
         concealmentEvents: k,
         insertedSamplesForDeceleration: 0,
         removedSamplesForAcceleration: 96 * k,
+        packetsDiscarded: 3 * k,
+        totalAudioEnergy: 0.0025 * k,
     });
 
     it('turns the cumulative counters into one second of values', () => {
@@ -76,6 +78,9 @@ describe('AudioStatsSampler', () => {
         expect(row.concealed).toBe(480);
         expect(row.concealmentEvents).toBe(1);
         expect(row.removed).toBe(96);
+        expect(row.discarded).toBe(3);
+        expect(row.energy).toBeCloseTo(0.0025, 9);
+        expect(row.flushes).toBe(-1); // Chrome only, absent here
         expect(AudioStatsSampler.concealedPercent(row)).toBeCloseTo(1, 6);
         expect(s.last).toBe(row);
     });
@@ -95,6 +100,17 @@ describe('AudioStatsSampler', () => {
         expect(row.targetMs).toBe(-1);
         expect(row.minimumMs).toBe(-1);
         expect(row.jitterMs).toBe(-1);
+        expect(row.discarded).toBe(-1);
+        expect(row.flushes).toBe(-1);
+        expect(row.energy).toBe(-1);
+    });
+
+    it('counts the flushes where the browser reports them', () => {
+        const s = new AudioStatsSampler();
+        s.sample({ jitterBufferEmittedCount: 0, jitterBufferFlushes: 2 }, 0);
+        expect(
+            s.sample({ jitterBufferEmittedCount: 960, jitterBufferFlushes: 3 }, 1000).flushes,
+        ).toBe(1);
     });
 
     it('keeps the newest rows and writes them as CSV', () => {
@@ -104,8 +120,8 @@ describe('AudioStatsSampler', () => {
         const lines = s.csv().trim().split('\n');
         expect(lines[0]).toBe(AUDIO_STATS_COLUMNS.join(','));
         expect(lines.length).toBe(3);
-        expect(lines[2].startsWith('3000,60.00,60.00,60.00,2.10,200,0,48000,480,0,1,0,96')).toBe(
-            true,
+        expect(lines[2]).toBe(
+            '3000,60.00,60.00,60.00,2.10,200,0,48000,480,0,1,0,96,3,-1,0.00250000',
         );
     });
 });

@@ -30,7 +30,13 @@
  * - the arrival jitter (RFC 3550, the receiver's own estimate);
  * - the sound NetEq had to make up: concealed samples (the crackle), the
  *   silent part of them, concealment events, and the samples it inserted or
- *   removed to slow down or catch up.
+ *   removed to slow down or catch up;
+ * - what never reached the speaker although it arrived: packets NetEq
+ *   discarded (late, or thrown out with a flushed buffer), the flushes
+ *   themselves (Chrome only), and the energy of the sound actually played
+ *   (`totalAudioEnergy`), which tells a sound lost inside the browser from one
+ *   lost after it. A1 (06/10): the host sent all 60 beeps of a pass, the
+ *   client's output held 12-19, with no packet lost.
  *
  * Only the stream's sound: in POC Ultra's audio road mode (`vaudio`, `uaudio`)
  * other audio tracks carry video, and the last `inbound-rtp` of kind audio may
@@ -85,6 +91,9 @@ export const AUDIO_STATS_COLUMNS = [
     'concealmentEvents',
     'inserted',
     'removed',
+    'discarded',
+    'flushes',
+    'energy',
 ];
 
 /** The columns that hold milliseconds. */
@@ -92,6 +101,10 @@ const MS_COLUMNS = new Set(['bufferMs', 'targetMs', 'minimumMs', 'jitterMs']);
 
 const delta = (now, before) =>
     typeof now === 'number' && typeof before === 'number' && now >= before ? now - before : 0;
+
+/** The interval's value of a counter some browsers lack: -1 when absent. */
+const optionalDelta = (now, before) =>
+    typeof now === 'number' && typeof before === 'number' ? delta(now, before) : -1;
 
 export class AudioStatsSampler {
     /** @param {{maxRows?: number}} [opts] */
@@ -139,6 +152,9 @@ export class AudioStatsSampler {
             concealmentEvents: delta(s.concealmentEvents, prev.concealmentEvents),
             inserted: delta(s.insertedSamplesForDeceleration, prev.insertedSamplesForDeceleration),
             removed: delta(s.removedSamplesForAcceleration, prev.removedSamplesForAcceleration),
+            discarded: optionalDelta(s.packetsDiscarded, prev.packetsDiscarded),
+            flushes: optionalDelta(s.jitterBufferFlushes, prev.jitterBufferFlushes),
+            energy: optionalDelta(s.totalAudioEnergy, prev.totalAudioEnergy),
         };
         this.last = row;
         this.rows.push(row);
@@ -152,14 +168,19 @@ export class AudioStatsSampler {
         return (100 * Math.max(0, row.concealed - row.silentConcealed)) / row.samples;
     }
 
-    /** The rows as CSV, header first: the times in ms to two decimals, -1 kept. */
+    /**
+     * The rows as CSV, header first: the times in ms to two decimals, the
+     * energy to eight (a 20 ms beep at half scale is ~0.0025), -1 kept.
+     */
     csv() {
         const lines = [AUDIO_STATS_COLUMNS.join(',')];
         for (const r of this.rows)
             lines.push(
                 AUDIO_STATS_COLUMNS.map((c) => {
                     const v = r[c];
-                    return MS_COLUMNS.has(c) && v >= 0 ? v.toFixed(2) : v;
+                    if (v >= 0 && MS_COLUMNS.has(c)) return v.toFixed(2);
+                    if (v >= 0 && c === 'energy') return v.toFixed(8);
+                    return v;
                 }).join(','),
             );
         return lines.join('\n') + '\n';
