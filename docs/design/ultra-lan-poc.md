@@ -1550,6 +1550,57 @@ Android 10, Mali-G31) expose `navigator.gpu` mais `requestAdapter()` rend
 `null` : pas de WebGPU (Android le réserve à 12+). WebGL2 y est, avec
 `EXT_color_buffer_float`. PyroWave sur une TV passe donc par le repli WebGL2.
 
+### 6.21 120 images/s par défaut, et le repli WebGL2 du décodeur (06/10/2026, 20:45)
+
+**La cadence.** Il n'y a rien à changer : l'« Auto » du produit prend déjà
+la fréquence de l'écran du client, plafonnée à 120 (`AUTO_FPS_MAX`). Une passe
+PyroWave avec la cadence et l'écran virtuel laissés au produit (UM790Pro,
+dalle à 240 Hz) donne 1920×1080 à 120 i/s, écran virtuel créé à 240 Hz
+(`u14f-…-pw-ar-auto`). Un client à 60 Hz reste à 60 : « si l'écran le
+permet ». Seul le banc forçait 60 (`U14_FPS`, défaut 60 dans `u14_series.py`).
+
+**Le repli WebGL2** (`a53d7eed`, `PyroWaveDecoderGL.js`). Sans calcul ni
+écriture dispersée, chaque étape devient une passe où chaque fragment calcule
+une sortie : décalages des blocs 8×8 et des signes par bloc 32×32 ;
+magnitudes des 128 fils d'un bloc (MRT : 8 valeurs et leur compte de
+non-nuls) ; comptes par groupe de 16 fils ; signes, à la somme exclusive des
+non-nuls qui précèdent (le scan que l'amont fait en mémoire partagée). Puis,
+par niveau et composante, une passe en lignes qui lit les coefficients
+directement dans la texture des fils, et une en colonnes. Chaque échantillon
+déroule les quatre pas CDF 9/7 sur sa propre fenêtre de 9, miroir aux bords.
+Le parseur de paquets passe dans `PyroWaveFrame.js`, commun aux deux.
+
+| Banc du décodeur (`decoder_lab.py`), 5 clips 1080p, 60 images | WebGPU | WebGL2 |
+| ------------------------------------------------------------- | -----: | -----: |
+| Écart max avec la référence (Y, C)                            |   1, 1 |   1, 1 |
+| Affichage : écart RGB max                                     |      3 |      3 |
+| Décodage GPU, RTX 5060 Ti, p50                                | 0,17 ms | 0,83 ms |
+
+SwiftShader d'abord (la règle « WARP d'abord ») : juste, 270 ms par image.
+
+| De bout en bout, UM790Pro (780M), 120 i/s, 30 clics | WebGPU (§6.20) | WebGL2, minuteries | WebGL2, messages |
+| --------------------------------------------------- | -------------: | -----------------: | ---------------: |
+| Images dessinées / s                                |        113-118 |                 96 |              113 |
+| Remplacées avant décodage                           |         79-112 |              1 167 |              150 |
+| Soumis → GPU fini, p50                              |    4,3-4,9 ms |             9,2 ms |           5,7 ms |
+| Clic, médiane                                       |   29,8-38,3 ms |            42,3 ms |          41,9 ms |
+
+- La première version attendait la barrière GPU par `setTimeout(0)` en
+  chaîne, bridé à 4 ms par le navigateur : le décodage suivant attendait, un
+  dixième des images était remplacé. Par `MessageChannel`, le repli tient les
+  120 i/s.
+- Le clic à ~42 ms sur une passe de 30 clics est au-dessus des passes WebGPU,
+  mais une passe seule ne départage rien (§6.20). Le repli ne sert de toute
+  façon que là où WebGPU manque.
+- Clé de banc : `mw_ultra_api=webgl2` force le repli. Elle reste dans le
+  profil du Chrome de banc ; une passe WebGPU qui suit doit poser
+  `mw_ultra_api=webgpu`.
+
+**Freebox.** Pas encore mesurée : la box a quitté le réseau dans la soirée
+(plus d'adresse MAC, le paquet magique ne la réveille pas), sans doute mise en
+veille profonde par la TV (HDMI-CEC). Prochaine étape dès qu'elle est
+rallumée : le repli sur la Mali-G31.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
