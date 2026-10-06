@@ -1078,6 +1078,42 @@ The house link was busy that evening.
   ones lost to the socket. And a congestion-controlled audio road, measured on
   the Mac.
 
+### 06/10/2026 — W4 on the Mac: the audio road with a capped bitrate
+
+Bruno's question: with the bitrate capped, does the audio road still flood the
+Mac? Same bench as the entry above (DualRTX `--dev` build of 23:20, the Mac's
+Chrome in Wi-Fi, HEVC, page at 240, 60 clicks a pass). The audio road ran
+without pacing (`aroadpace=0`, the default since aea2a192). `--bitrate` fixed
+at 12000 (about half of last night's Auto) and 24000, two rounds, arms rotated.
+
+| Pass | Kernel drops | Clicks of 60 | Click median (p90), ms |
+|---|---|---|---|
+| audio road, 12 Mbit/s | 0 / 0 | 56 / 57 | 59.3 (77.5) / 68.0 (84.8) |
+| SCTP, 12 Mbit/s | 28 / 20 | 59 / 58 | 60.1 (83.0) / 69.8 (84.9) |
+| audio road, 24 Mbit/s | 72 / 122 | 54 / 51 | 68.0 (85.5) / 68.0 (83.0) |
+| SCTP, 24 Mbit/s | 288 / 29 | 58 / 59 | 68.6 (86.5) / 69.6 (89.8) |
+| audio road, Auto (last night) | 802-4,266 | 44-53 | ~66.5 |
+
+- **The cap removes the flood.** At 12 Mbit/s the audio road drops nothing in
+  the Mac's socket, and at 24 Mbit/s it drops 72-122 against 800-4,300 at
+  Auto. The page's Auto asks more than Chrome drains on the Mac when it reads
+  late. A fixed cap, or a window, keeps the road under that.
+- **It still misses clicks with zero drops.** 3-4 clicks of 60 lost at
+  12 Mbit/s, 6-9 at 24, against 1-2 for SCTP. These losses are not in the
+  socket: they are on the air. SCTP resends them in time; the audio road gives
+  up after `mw_aroad_giveup` (15 ms) and heals by invalidation, so the frame
+  carrying the flag can go missing.
+- **Time at the click is the same.** The audio road's median lead over SCTP
+  disappears once both are capped (59-68 ms each). Last night's lead at Auto
+  (~66.5 against ~73) came with the flood.
+- **What it means:**
+  - A capped bitrate is a usable workaround on a Mac in Wi-Fi, but it does not
+    make the audio road better than SCTP there.
+  - Two levers are left for the audio road: a send window against the flood
+    (POC session, 89adcb0f host side, key `aroadwin=<KiB>`, off by default)
+    and a longer give-up for the losses on the air (`mw_aroad_giveup=40`).
+    Neither is measured on the Mac yet.
+
 ### 05/10/2026 — DSCP on the wire and on the air, and the host's share of a sound (audio + DSCP plan, D0 and A1)
 
 Plan « le son et la priorité des paquets », session moonlight-web-da. Tools in
