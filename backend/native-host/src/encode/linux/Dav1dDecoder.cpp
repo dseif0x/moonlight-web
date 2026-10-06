@@ -128,8 +128,16 @@ bool Dav1dDecoder::open(std::string& error)
     Room<Dav1dSettings> settings;
     lib.defaultSettings(&settings.value);
     // A picture per temporal unit, at once: what a stream's receiver does.
+#if DAV1D_API_VERSION_MAJOR >= 6
     settings.value.n_threads = 1;
     settings.value.max_frame_delay = 1;
+#else
+    // dav1d before 1.0 (Ubuntu 22.04's, which the release packages build
+    // against) names the same two leading ints this way, so a newer library
+    // opened at run time reads the very values above.
+    settings.value.n_frame_threads = 1;
+    settings.value.n_tile_threads = 1;
+#endif
     const int r = lib.open(&d->context, &settings.value);
     if (r < 0 || !d->context) {
         error = m_Version + " does not open: " + std::strerror(-r);
