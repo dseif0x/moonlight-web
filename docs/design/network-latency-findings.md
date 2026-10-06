@@ -1200,6 +1200,33 @@ give-up changed nothing. Counters added to `pass.py` (c8579820): `whole`
   of 10-15%, then the audio road with v2 against SCTP at Auto in the same
   session.
 
+**Same day, 09:49-10:30: the resend budget at 10, 15 and 20%, against SCTP.**
+A bench key sets the budget's share (`aroadbudget=<%>`, 210318fd; default 20).
+All four arms ran at Auto, HEVC, page at 240, on build\ at 8ef302e3. That made
+three rounds, with the order rotated, 12 passes, and all of them measured.
+(`build-t7\` could not run them: the dev edition's virtual-display task only
+elevates `build\MoonlightWeb.exe`, so its launches failed in `vdisplay`.)
+
+| Arm | Clicks of 60 | Click median, ms | Kernel drops | Lost frames | Resent / refused |
+|---|---|---|---|---|---|
+| SCTP | 60 / 58 / 58 | 75.3 / 74.4 / 67.0 | 388 / 436 / 249 | – | – |
+| aroad v2, 20% | 59 / 54 / 54 | 76.4 / 66.1 / 59.1 | 1,048 / 2,319 / 2,387 | 6 / 8 / 7 | 809 / 509, 1,402 / 1,836, 1,404 / 1,733 |
+| aroad v2, 15% | 59 / 55 / 50 | 74.0 / 74.0 / 70.8 | 996 / 1,009 / 2,039 | 12 / 13 / 22 | 601 / 704, 603 / 783, 1,202 / 1,304 |
+| aroad v2, 10% | 51 / 56 / 50 | 66.6 / 64.7 / 74.3 | 1,052 / 1,987 / 1,622 | 13 / 30 / 26 | 604 / 846, 1,002 / 1,873, 1,015 / 1,004 |
+
+- **A smaller budget does not help.** The kernel drops stay within the
+  pass-to-pass spread: 1,000-2,400 at every share. The frames lost double or
+  triple below 20% (6-8 → 12-30). The clicks fall: 167 of 180 at 20%, 164 at
+  15%, 157 at 10%. 20% stays.
+- **SCTP beats the audio road here.** It catches 176 of 180 clicks against
+  167, and its kernel drops are 4-6 times fewer (249-436). The click median is
+  the same within the spread: 67-75 ms against 59-76 ms.
+- **W4's answer for a Mac in Wi-Fi at Auto:** the video stays on SCTP. The
+  audio road, even repaired, fills Chrome's socket more than SCTP does: SCTP's
+  window holds the host back, while the audio road sends and then resends.
+  Clicks are lost to that, and nothing is gained in latency. The audio road
+  remains a POC option.
+
 ### 05/10/2026 — DSCP on the wire and on the air, and the host's share of a sound (audio + DSCP plan, D0 and A1)
 
 Plan « le son et la priorité des paquets », session moonlight-web-da. Tools in
@@ -1504,6 +1531,8 @@ Link keys go in `MW_NATIVE_TUNING` / `--tuning` of `local_matrix.py`
 | `sctpss=0..5` | usrsctp's stream scheduler (4 = fair bandwidth) | `0c21bd5a` |
 | `namedrops=0\|1` | name the relay's dropped delta to the encoder | `25bf8c48` |
 | `audiolog=1` | each audio packet's way through the host (pacer tick and queue, peak, relay thread, RTP track), `relay-audio-*.csv` | `1489e114` |
+| `aroadpace=<x>`, `aroadwin=<KiB>` | the audio road's pacing and send window (both off by default) | `aea2a192`, `89adcb0f` |
+| `aroadbudget=<%>` | the audio road's resend budget, share of what it sent over 100 ms (default 20) | `210318fd` |
 
 Environment: `MW_SCTP_RTO_MIN_MS`, `MW_SCTP_SACK_DELAY_MS`;
 `MW_LATENCY_FLAG_SOUND=click|tick` (the server's latency flag also beeps,
