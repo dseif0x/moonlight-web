@@ -1194,6 +1194,56 @@ on a local client (DualRTX, Arc display): Chrome reported a target of 40 ms
 and a minimum of 20, and the buffer held 33-37 ms, no concealment. To settle
 in A2 (default 60 against `off`, per client).
 
+### 06/10/2026 — The Freebox's DSCP → Wi-Fi queue table: precedence behind the mesh link, nothing on the same box (audio + DSCP plan, D0)
+
+Plan « le son et la priorité des paquets », D0.4, 05:10-05:15, a quiet Wi-Fi.
+Tool: `scripts/bench/dscp/ap-table.sh` + `ap_table.py` (README).
+
+**Method.** The UM790Pro's AX210 joins one access point (BSSID pinned, no IP
+address) and counts the data frames it receives and sends per 802.11 TID
+(mac80211's counters, `iw dev wlp3s0 station dump -v`). Raw marked frames
+leave its own wired port for its own Wi-Fi MAC: 16 classes from DF to CS7, 300
+frames each at 150/s. Every class landed 300 of 300 frames on one TID (a few
+group-addressed frames of the house on the side, non-QoS). The other
+direction, out of the Wi-Fi, is this kernel's own table: it gave exactly RFC
+8325 (CS1 → 1, AF21 → 3, CS3-AF42 → 4, CS5 → 5, VA and EF → 6, CS6 and CS7 →
+7), which proves the counters. A Windows station cannot do this: its Wi-Fi
+stack hands frames up as plain Data, without the QoS field (pktmon on the N95).
+
+**Down, the access point's choice:**
+
+| DSCP | near repeater `07:1d:00` (the wired port's own box, -26 dBm) | far repeaters `ec:68:b4` (the N95's) and `e4:6f:44`, behind the Wi-Fi 7 link |
+|---|---|---|
+| DF 0, LE 1 | 0 (BE) | 0 (BE) |
+| CS1 8, **AF11 10** | 0 (BE) | **1 (BK)** |
+| CS2 16, AF21 18 | 0 (BE) | 2 (BK) |
+| CS3 24, AF31 26 | 0 (BE) | 3 (BE) |
+| CS4 32, AF41 34, AF42 36 | 0 (BE) | 4 (VI) |
+| CS5 40, VA 44, **EF 46** | 0 (BE) | **5 (VI)** |
+| CS6 48 | 0 (BE) | 6 (VO) |
+| CS7 56 | 0 (BE) | 7 (VO) |
+
+- **On the same box, wired port to Wi-Fi: the DSCP is ignored**, everything
+  goes best effort.
+- **Behind the mesh link: the old precedence rule**, TID = DSCP >> 3. Whether
+  the far repeater classifies, or the mesh link carries the priority the
+  entry box gave it, is not known; for a client behind the link the effect is
+  the same.
+- So, on this network:
+  - **EF lands in VI**, the video's queue, not VO: audio marked EF does not
+    pass the video (AF41/AF42 → TID 4, the same AC). Only CS6 or CS7 reach VO;
+  - **AF11 lands in BK, below best effort**. libdatachannel marks every SCTP
+    packet AF11, so a Linux or macOS host sends its SCTP video, inputs and
+    messages to a client behind a far repeater in the background queue
+    (AIFSN 7): it loses to any best-effort traffic of the house;
+  - the audio road (`aroad`, an audio track, EF) from a Linux or macOS host
+    lands in VI, not VO: the §6 worry about video in AC_VO does not hold here;
+  - a Windows host (DSCP 0) is best effort everywhere. The W4 series all ran
+    from DualRTX: their SCTP-against-aroad figures carry no queue difference.
+- Open: which box DualRTX's cable hangs off (the stream's real path to the
+  N95), and what the box itself does. Both ask for a station with an IP and a
+  sender elsewhere on the LAN.
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
@@ -1290,6 +1340,10 @@ What the measurements support, in order of the path:
   Update (05/10, §3 « DSCP on the wire and on the air »): Windows does mark a
   user socket (EF, AF41; not CS6), only libjuice does not try; the Freebox's
   repeaters keep the mark; their DSCP → Wi-Fi queue table is still unread.
+  Update (06/10, §3 « The Freebox's DSCP → Wi-Fi queue table »): read. Behind
+  the mesh link, precedence (EF → VI, AF11 → BK, CS6 → VO); on the wired
+  port's own box, everything BE. The audio road would ride VI, not VO, and a
+  Linux or macOS host's SCTP rides BK.
 
 ## 7. Knobs (bench keys, off by default unless said)
 

@@ -16,8 +16,27 @@ product code marks anything. Findings go to
 | `mon-on.sh`, `mon-off.sh`, `mon-cap.sh` | Linux, Intel AX210 | monitor mode on channel 44 / 80 MHz (the Freebox's 5 GHz), back to managed, a capture of N seconds |
 | `tidstat.py` | Linux | per receiver and transmitter, the 802.11 QoS data frames by TID (bad-FCS frames left out) |
 | `tidtime.py` | Linux | the TIDs of the frames to one station from one source, per `udptos.py` window: the access point's DSCP → Wi-Fi queue table |
+| `ap-table.sh`, `ap_table.py` | Linux, Wi-Fi + wired | the same table read from the station's own per-TID counters, no monitor mode: one BSSID per run |
 
 TID → queue: 1-2 BK, 0 and 3 BE, 4-5 VI, 6-7 VO.
+
+### The access point's table, from the station's counters
+
+```
+MW_WIFI_PSK=<key> sudo --preserve-env=MW_WIFI_PSK ./ap-table.sh <bssid>
+```
+
+The machine's Wi-Fi joins one access point (BSSID pinned, no IP address), and
+`ap_table.py` sends raw marked frames from its own wired port to its own
+Wi-Fi MAC. mac80211 counts what the station receives per TID
+(`iw dev <wifi> station dump -v`): each class's frames land on the TID the
+access point gave them. Frames sent the other way, out of the Wi-Fi, show
+this kernel's own table (RFC 8325 since Linux 6.8), a known answer that
+checks the counters first. With the access point the wired port hangs off,
+nothing crosses the mesh link between repeaters. The key never touches a
+disk (in-memory profile, secret flagged "not saved", handed over by a pipe);
+the profile is deleted on exit. A Windows station cannot do this: its Wi-Fi
+stack hands frames up as plain Data, without the QoS field.
 
 ### Windows marking probe
 
@@ -91,3 +110,24 @@ the N95 in Wi-Fi with `pktmon start --capture --comp nics`, then
 
 So a Windows build of libjuice that sets `IP_TOS` (and `IPV6_TCLASS`, harmless)
 on its socket marks every stream packet as Linux and macOS already do.
+
+### 06/10/2026 — D0.4, the access point's table (session moonlight-web-da)
+
+`ap-table.sh` on the UM790Pro (Ubuntu 24.04, kernel 7.0, AX210), 05:10-05:15,
+16 classes × 300 frames, 300 of 300 on one TID for every class. Up (this
+kernel): exactly RFC 8325. Down (the access point's choice):
+
+| DSCP | near repeater `3a:07:16:07:1d:00` (-26 dBm, the wired port's own box) | far repeaters `3a:07:16:ec:68:b4`, `3a:07:16:e4:6f:44` (-61/-63 dBm, behind the Wi-Fi 7 link) |
+|---|---|---|
+| DF, LE | 0 | 0 |
+| CS1, AF11 | 0 | 1 (BK) |
+| CS2, AF21 | 0 | 2 (BK) |
+| CS3, AF31 | 0 | 3 |
+| CS4, AF41, AF42 | 0 | 4 (VI) |
+| CS5, VA, EF | 0 | 5 (VI) |
+| CS6 | 0 | 6 (VO) |
+| CS7 | 0 | 7 (VO) |
+
+Same box: the DSCP is ignored. Behind the mesh link: precedence (TID =
+DSCP >> 3), so EF rides VI with the video and libdatachannel's AF11 (all
+SCTP) rides BK. The Wi-Fi was left disconnected, managed, with no profile.
