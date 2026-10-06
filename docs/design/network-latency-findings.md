@@ -1284,6 +1284,41 @@ stack hands frames up as plain Data, without the QoS field (pktmon on the N95).
   N95), and what the box itself does. Both ask for a station with an IP and a
   sender elsewhere on the LAN.
 
+### 06/10/2026 — The sound: the 60 ms floor costs ~25 ms on the Mac, and the N95 never plays most beeps (audio + DSCP plan, A1 bis and A2 begun)
+
+Windows native host DualRTX. Tools: `audio_summary.py` (content-age),
+`sound_offset.py` (photon). Commit `911ab5c1`.
+
+**The floor on the Mac** (Chrome in Wi-Fi, the W4 audio-road passes of session
+25, 06:00-06:08, round 1 at the default target of 60 ms, round 2 with
+`mw_audio_target=off`, plus two default passes of round 3):
+- with the floor, NetEq held a median buffer of ~71 ms (passes: 40-79);
+  without it, ~46 ms (38-61). NetEq alone targets 26-40 ms there;
+- no more concealment without the floor (0-0.03 % against 0-0.07 %), no
+  loss attributable to it;
+- the buffer settles at some level early in a pass and stays there: NetEq
+  only acts when it leaves a band around its target, so lowering the target
+  lowers the band. Small sample, one road; A2 with Bruno to confirm.
+
+**On the N95 the floor does nothing under load**: NetEq chose 240-320 ms by
+itself (06:08-06:20, the house's Wi-Fi busy again), far above 60.
+
+**Most beeps never reach the N95's output** (`MW_LATENCY_FLAG_SOUND=click`,
+`audiolog=1`, two passes of 60 clicks):
+- the host captured and sent all 60 beeps of each pass (60 loud bursts of 5
+  frames in its audio log, all `sent`); the page counted 20 and 54 packets
+  lost of ~10 600;
+- the client played 19 (1 kHz tone) and 12 (white noise). Its WAV holds
+  only those, at full level, digital silence between: the missing beeps are
+  not quieter, they are not played. The first eight clicks of the tone pass
+  were all heard, then most went missing as the buffer grew;
+- white noise fares no better, and beeps went missing in seconds where NetEq
+  neither cut nor concealed: its time stretching is not the cause;
+- heard beeps trail their flag by a median of 283 ms (tone, 15 pairs) and
+  439 ms (noise, 8 pairs), close to NetEq's buffer;
+- next: the page now logs NetEq's discarded packets, flushes and played
+  energy, to place the loss inside or after the browser; then a calm link.
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
