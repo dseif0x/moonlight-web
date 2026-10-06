@@ -294,4 +294,18 @@ void run_monitor_layout_tests()
     CHECK_EQ(startTimeFromStat(stat), static_cast<uint64_t>(123456789));
     CHECK_EQ(startTimeFromStat("not a stat line"), static_cast<uint64_t>(0));
     CHECK_EQ(startTimeFromStat("1 (x) S 1 2"), static_cast<uint64_t>(0));
+
+    // "Screen" recorded by GNOME itself: the primary when it is a real
+    // monitor, else the first real one — never one of Mutter's virtual ones.
+    DisplayLayout desk;
+    desk.monitors = {physical("HDMI-1", 1920, 1080), physical("HDMI-2", 2560, 1440)};
+    desk.logical = {at("HDMI-1", 0, 0), at("HDMI-2", 1920, 0, true)};
+    CHECK_EQ(screenToRecord(desk), std::string("HDMI-2"));
+    desk.monitors.push_back(virtualMonitor("Meta-0", 1920, 1080));
+    desk.logical = {at("Meta-0", 0, 0, true), at("HDMI-1", 1920, 0), at("HDMI-2", 3840, 0)};
+    CHECK_EQ(screenToRecord(desk), std::string("HDMI-1"));
+    DisplayLayout onlyVirtual;
+    onlyVirtual.monitors = {virtualMonitor("Meta-0", 1920, 1080)};
+    onlyVirtual.logical = {at("Meta-0", 0, 0, true)};
+    CHECK_EQ(screenToRecord(onlyVirtual), std::string());
 }

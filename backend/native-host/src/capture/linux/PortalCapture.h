@@ -94,7 +94,9 @@ public:
     /// name as it is — another stream's virtual one, for a guest — whose
     /// format is the monitor's own. Its stream is read on the session's own
     /// PipeWire, and a session Mutter closes is a lost display. Before start().
-    void setMutter(std::string connector);
+    /// @p realMonitor: a screen of the desktop ("Screen" without the scanout),
+    /// whose pointer stays beside the picture, as on any real monitor.
+    void setMutter(std::string connector, bool realMonitor = false);
 
     /// Read gamescope's own node @p node instead — an app in its own gamescope
     /// (GamescopeSession.h), on the session's PipeWire, no portal, nobody to

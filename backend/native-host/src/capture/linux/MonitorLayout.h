@@ -97,6 +97,23 @@ inline bool isMutterVirtual(const LayoutMonitor& monitor)
     return monitor.vendor == "MetaVendor";
 }
 
+/// The real monitor "Screen" means when GNOME records it itself, with no
+/// dialog: the primary when it is a real one, else the first real monitor of
+/// the layout. Empty when every monitor is one of Mutter's virtual ones.
+inline std::string screenToRecord(const DisplayLayout& layout)
+{
+    std::string first;
+    for (const LayoutLogical& logical : layout.logical) {
+        for (const std::string& connector : logical.connectors) {
+            const LayoutMonitor* monitor = findLayoutMonitor(layout, connector);
+            if (!monitor || isMutterVirtual(*monitor)) continue;
+            if (logical.primary) return connector;
+            if (first.empty()) first = connector;
+        }
+    }
+    return first;
+}
+
 /// The monitor this session made: the virtual monitor of @p width × @p height
 /// that was not among @p before — or, when the only one there is was (Mutter
 /// gave a freed name to the new one), that one. Empty when none fits, or more

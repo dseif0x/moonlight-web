@@ -953,6 +953,38 @@ private:
                 log::warning("[native] virtual display: " + m_MutterRefusal +
                              " — the portal makes it");
             }
+            // A screen of the desktop, with no scanout to read: GNOME records
+            // it itself too, rather than the portal asking the user to pick it
+            // in a dialog on the host's screen — which a viewer elsewhere never
+            // answers, and the stream timed out on (UM790Pro, a build without
+            // the launcher's capabilities, 06/10/2026). The primary, when it
+            // is a real monitor: what "Screen" shows. The portal remains for a
+            // GNOME that refuses, or another desktop.
+            if (!m_Target.portalVirtual && wantMutter(notMutter)) {
+                capture::DisplayLayout layout;
+                uint32_t serial = 0;
+                std::string why;
+                const std::string screen = capture::MutterDisplayConfig::read(layout, serial, why)
+                                               ? capture::screenToRecord(layout)
+                                               : std::string();
+                bool refused = false;
+                if (!screen.empty() && startMutter(screen, error, refused, true)) {
+                    // The pointer lands on it by its name (readInputRects).
+                    m_VirtualConnector = screen;
+                    log::info("[native] screen: " + screen +
+                              " recorded by GNOME's own screen cast, no dialog");
+                    watchLayout();
+                    m_PortalModes = capture::KmsCapture::modeSignature(m_CardPath);
+                    m_PortalOpenedModes = m_PortalModes;
+                    return true;
+                }
+                if (refused) m_MutterRefusal = "GNOME refused its own screen cast (" + error + ")";
+                log::info("[native] screen: " +
+                          (screen.empty() ? std::string("no real monitor in GNOME's layout")
+                                          : screen + " not recorded by GNOME (" + error + ")") +
+                          " — the portal asks for one");
+                error.clear();
+            }
             auto portal = std::make_unique<capture::PortalCapture>();
             // A monitor made for this stream, at its size, and at the rate the
             // consumer asks of a display it makes — 240 Hz, faster than the
@@ -1195,14 +1227,15 @@ private:
     /// (240 Hz, as the portal's: chooseCadence keeps the stream's own) — or,
     /// with @p connector, that monitor as it is. @p refused when Mutter turned
     /// the route down outright.
-    bool startMutter(const std::string& connector, std::string& error, bool& refused)
+    bool startMutter(const std::string& connector, std::string& error, bool& refused,
+                     bool realMonitor = false)
     {
         auto cast = std::make_unique<capture::PortalCapture>();
         if (connector.empty())
             cast->setVirtualMonitor(m_Config.width, m_Config.height,
                                     m_Config.virtualRefreshHz > 0 ? m_Config.virtualRefreshHz
                                                                   : m_Config.fps);
-        cast->setMutter(connector);
+        cast->setMutter(connector, realMonitor);
         cast->setRenderNode(capture::KmsCapture::renderNodeFor(m_CardPath));
         if (!m_PortalShmOnly && m_Config.tuning.portalDmabuf != EncoderTuning::Choice::Off)
             cast->offerDmabuf(dmabufOffer());
@@ -2345,7 +2378,8 @@ private:
             // A guest's stream shows the desktop's shared monitor (SharedMonitor.h):
             // when another took its place — the owner's stream came — or the one
             // it records lost its maker, it starts over on the one there is now.
-            if (m_OnMutter && !m_Config.virtualPrimary && steadyNowUs() >= nextShareCheckUs) {
+            if (m_OnMutter && m_Target.portalVirtual && !m_Config.virtualPrimary &&
+                steadyNowUs() >= nextShareCheckUs) {
                 nextShareCheckUs = steadyNowUs() + kShareCheckUs;
                 capture::SharedMonitor now;
                 capture::readSharedMonitor(now);

@@ -143,6 +143,8 @@ struct PortalCapture::Impl
     /// Mutter makes it, or records the monitor named here (setMutter).
     bool mutter = false;
     std::string mutterConnector;
+    /// The connector is a real monitor of the desktop, not a virtual one.
+    bool mutterRealMonitor = false;
     /// One of GNOME's virtual monitors before GNOME 48: its pointer is asked
     /// painted into every picture (MutterScreenCast::embedsPointer).
     bool embedCursor = false;
@@ -404,10 +406,11 @@ void PortalCapture::setKwinVirtualOutput(std::string name)
     d->kwinName = std::move(name);
 }
 
-void PortalCapture::setMutter(std::string connector)
+void PortalCapture::setMutter(std::string connector, bool realMonitor)
 {
     d->mutter = true;
     d->mutterConnector = std::move(connector);
+    d->mutterRealMonitor = realMonitor;
 }
 
 void PortalCapture::setGamescope(uint32_t node, std::string xDisplay, int pid)
@@ -470,8 +473,8 @@ bool PortalCapture::start(std::string& error)
         // stream's recorded as it is — paint the pointer into their DMA-BUF
         // frames up to GNOME 47: it is asked painted into every one, or it
         // blinks. The version is the shell's to say.
-        const bool gnomeVirtual =
-            (virtualMonitor && d->kwinName.empty()) || !d->mutterConnector.empty();
+        const bool gnomeVirtual = (virtualMonitor && d->kwinName.empty()) ||
+                                  (!d->mutterConnector.empty() && !d->mutterRealMonitor);
         d->embedCursor =
             gnomeVirtual && MutterScreenCast::embedsPointer(MutterScreenCast::shellMajor());
         d->portal.setEmbedCursor(d->embedCursor);
