@@ -404,6 +404,8 @@ private:
     // rate governor next to SCTP's retransmissions (linkstats).
     std::unique_ptr<AroadPacer> m_AroadPacer;
     double m_AroadPace = -1;
+    int m_AroadWindowKb = 0;
+    int64_t m_AroadAcks = 0;
     std::atomic<int64_t> m_AroadSent{0}, m_AroadResent{0};
     int64_t m_LinkAroadSent = 0, m_LinkAroadResent = 0;
     std::shared_ptr<rtc::DataChannel> m_InputDc;

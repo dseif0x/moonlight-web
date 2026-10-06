@@ -37,10 +37,12 @@ int64_t steadyNowUs()
 
 } // namespace
 
-AroadPacer::AroadPacer(double multiple, int64_t floorBytesPerSecond, size_t burstBytes)
+AroadPacer::AroadPacer(double multiple, int64_t floorBytesPerSecond, size_t burstBytes,
+                       int64_t windowBytes)
     : m_Multiple(multiple)
     , m_Floor((std::max<int64_t>)(floorBytesPerSecond, 1))
     , m_Burst((std::max<size_t>)(burstBytes, 1))
+    , m_SendWindow((std::max<int64_t>)(windowBytes, 0))
 {
     const int64_t rate = rateFor(m_Multiple, m_Floor, 0);
     m_Pacer.configure(rate, m_Burst);
@@ -61,7 +63,15 @@ AroadPacer::~AroadPacer()
 void AroadPacer::send(std::shared_ptr<rtc::Track> track, std::vector<std::byte> chunk,
                       uint32_t timestamp, bool resend)
 {
-    Job job{std::move(track), std::move(chunk), timestamp, steadyNowUs()};
+    Job job{std::move(track), std::move(chunk), timestamp, steadyNowUs(), resend};
+    // The chunk's header (DataChannelRelay::sendAudioRoad): 'M', flags,
+    // frame seq, index.
+    if (job.chunk.size() >= 6) {
+        const auto b = [&job](size_t i) { return static_cast<unsigned>(job.chunk[i]); };
+        job.keyframe = (b(1) & 1) != 0;
+        job.seq = static_cast<uint16_t>(b(2) << 8 | b(3));
+        job.index = static_cast<uint16_t>(b(4) << 8 | b(5));
+    }
     {
         std::lock_guard<std::mutex> lk(m_Mutex);
         if (m_Stop) return;
@@ -71,6 +81,27 @@ void AroadPacer::send(std::shared_ptr<rtc::Track> track, std::vector<std::byte> 
             m_Queue.push_back(std::move(job));
     }
     m_Cv.notify_one();
+}
+
+void AroadPacer::ack(uint16_t seq, uint16_t index)
+{
+    {
+        std::lock_guard<std::mutex> lk(m_Mutex);
+        m_SendWindow.acked(static_cast<uint32_t>(seq) << 16 | index, steadyNowUs());
+    }
+    m_Cv.notify_one();
+}
+
+int64_t AroadPacer::inFlight()
+{
+    std::lock_guard<std::mutex> lk(m_Mutex);
+    return m_SendWindow.inFlight();
+}
+
+int AroadPacer::windowResets()
+{
+    std::lock_guard<std::mutex> lk(m_Mutex);
+    return m_SendWindow.resets();
 }
 
 void AroadPacer::waitUs(int64_t us)
@@ -103,7 +134,19 @@ void AroadPacer::run()
         {
             std::unique_lock<std::mutex> lk(m_Mutex);
             m_Cv.wait(lk, [this]() { return m_Stop || !m_Queue.empty(); });
+            // The window: wait for the page's acks. A delta frame waiting
+            // longer than kDropAfterUs with a newer one behind it goes.
+            while (!m_Stop && !m_Queue.empty() &&
+                   !m_SendWindow.mayPass(m_Queue.front().chunk.size(), steadyNowUs())) {
+                if (steadyNowUs() - m_Queue.front().queuedUs >= kDropAfterUs) {
+                    const int dropped = dropOlderFrames(m_Queue);
+                    if (dropped) m_Dropped.fetch_add(dropped, std::memory_order_relaxed);
+                    if (m_Queue.empty()) break;
+                }
+                m_Cv.wait_for(lk, std::chrono::milliseconds(2));
+            }
             if (m_Stop) break;
+            if (m_Queue.empty()) continue;
             job = std::move(m_Queue.front());
             m_Queue.pop_front();
         }
@@ -129,6 +172,10 @@ void AroadPacer::run()
         if (queued > m_MaxQueueUs.load(std::memory_order_relaxed))
             m_MaxQueueUs.store(queued, std::memory_order_relaxed);
         m_Pacer.sent(bytes, now);
+        {
+            std::lock_guard<std::mutex> lk(m_Mutex);
+            m_SendWindow.sent(static_cast<uint32_t>(job.seq) << 16 | job.index, bytes);
+        }
         m_WindowBytes += static_cast<int64_t>(bytes);
         try {
             if (job.track && job.track->isOpen())

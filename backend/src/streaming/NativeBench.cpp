@@ -168,6 +168,8 @@ const char* const kUsage =
     "  ultrambps=<Mbit/s>          the PyroWave encoder's rate (default 170)\n"
     "  aroadpace=<x>               the audio road's chunks paced at x times what it carried,\n"
     "                              50 Mbit/s at least; 0 = a frame in one run (default 0)\n"
+    "  aroadwin=<KiB>              the audio road's send window: at most this much sent and\n"
+    "                              not yet acknowledged by the page (default: none)\n"
     "  rc12=driver|qp              D3D12 Video Encode's rate control; qp = the in-house one\n"
     "  reencode=0|1                in-house rate control: a picture far over its budget is\n"
     "                              coded again, at the QP that fits it (1); 0 sends it as is\n"
@@ -549,6 +551,9 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
     } else if (key == "aroadpace") {
         tuning.aroadPace = value.toDouble(&ok);
         ok = ok && tuning.aroadPace >= 0 && tuning.aroadPace <= 20;
+    } else if (key == "aroadwin") {
+        tuning.aroadWindowKb = value.toInt(&ok);
+        ok = ok && tuning.aroadWindowKb >= 1 && tuning.aroadWindowKb <= 65536;
     } else if (key == "ultrambps") {
         tuning.ultraMbps = value.toInt(&ok);
         ok = ok && tuning.ultraMbps >= 1 && tuning.ultraMbps <= 2000;

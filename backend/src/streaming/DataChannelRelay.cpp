@@ -854,6 +854,7 @@ void DataChannelRelay::setLinkBench(const mw::native::EncoderTuning& tuning)
     m_UltraSynthKb = tuning.ultraSynthKb;
     m_UltraUnordered = tuning.ultraUnordered;
     m_AroadPace = tuning.aroadPace;
+    m_AroadWindowKb = tuning.aroadWindowKb;
     m_PaceMultiple = tuning.paceMultiple;
     m_PaceBurstKb = tuning.paceBurstKb;
     m_SctpBufferKb = tuning.sctpBufferKb;
@@ -2085,6 +2086,18 @@ void DataChannelRelay::onInputMessage(const std::string& message, int64_t recvUs
         }
     } else if (type == "aroadnack") {
         resendAudioRoad(msg);
+    } else if (type == "aroadack") {
+        // {"type":"aroadack","t":"v"|"u","s":seq,"i":index}: the last chunk
+        // the page's worker received, for the road's window (aroadwin=).
+        if (m_AroadPacer) {
+            m_AroadPacer->ack(static_cast<uint16_t>(msg["s"].toInt()),
+                              static_cast<uint16_t>(msg["i"].toInt()));
+            if (++m_AroadAcks % 3000 == 0)
+                qInfo() << "[DataChannelRelay] audio road window:" << m_AroadPacer->inFlight()
+                        << "bytes in flight, frames dropped" << m_AroadPacer->droppedFrames()
+                        << "| resets" << m_AroadPacer->windowResets() << "| longest wait"
+                        << m_AroadPacer->maxQueueUs() / 1000 << "ms";
+        }
     } else if (type == "requestidr") {
         qInfo() << "[DataChannelRelay] Requesting IDR frame from Sunshine (browser request)";
         std::lock_guard<std::mutex> lk(m_VideoMutex);
@@ -3077,12 +3090,18 @@ void DataChannelRelay::createRtpVideoTracks()
     // floor dropped more in the kernel than a frame in one run (06/10/2026,
     // W4 « after »), as pacing SCTP did in W2 A: Chrome reads late, the host's
     // bursts are not the cause. Its resends feed the rate governor either way.
+    // Its window (aroadwin=<KiB>, AroadPacer.h), off unless the bench asks:
+    // at most that much sent past the last chunk the page acknowledged. One
+    // road a session, so one window for either track.
     if ((m_RtpVideoAudioRoad || m_UltraAudioRoad) && !m_AroadPacer) {
         const double multiple = m_AroadPace < 0 ? 0.0 : m_AroadPace;
-        if (multiple > 0) {
-            m_AroadPacer = std::make_unique<AroadPacer>(multiple, 50'000'000 / 8, 16 * 1024);
+        const int64_t window = static_cast<int64_t>(m_AroadWindowKb) * 1024;
+        if (multiple > 0 || window > 0) {
+            m_AroadPacer =
+                std::make_unique<AroadPacer>(multiple, 50'000'000 / 8, 16 * 1024, window);
             qInfo() << "[DataChannelRelay] audio road paced at" << multiple
-                    << "x what it carries, 50 Mbit/s at least (aroadpace=)";
+                    << "x what it carries, 50 Mbit/s at least (aroadpace=); window"
+                    << m_AroadWindowKb << "KiB (aroadwin=, 0 = none)";
         }
     }
 }

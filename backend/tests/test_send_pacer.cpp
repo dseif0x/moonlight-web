@@ -115,4 +115,91 @@ void run_send_pacer_tests()
         // Nothing carried yet: the floor.
         CHECK_EQ(AroadPacer::rateFor(3, 6'250'000, 0), int64_t(6'250'000));
     }
+
+    SECTION("AroadWindow — off, or no ack yet: never held");
+    {
+        AroadWindow off(0);
+        for (uint32_t i = 0; i < 100; ++i) {
+            CHECK(off.mayPass(1112, 0));
+            off.sent(i, 1112);
+        }
+        AroadWindow silent(48 * 1024);
+        for (uint32_t i = 0; i < 100; ++i) {
+            CHECK(silent.mayPass(1112, 0));
+            silent.sent(i, 1112);
+        }
+        CHECK_EQ(silent.inFlight(), int64_t(111'200));
+    }
+
+    SECTION("AroadWindow — an ack moves it, a lost chunk leaves it");
+    {
+        AroadWindow w(4000);
+        w.sent(1u << 16 | 0, 1000);
+        w.acked(1u << 16 | 0, 0); // heard: the window holds from now on
+        CHECK_EQ(w.inFlight(), int64_t(0));
+        w.sent(1u << 16 | 1, 1000);
+        w.sent(1u << 16 | 2, 1000); // lost
+        w.sent(1u << 16 | 3, 1000);
+        CHECK(w.mayPass(1000, 1000));
+        w.sent(1u << 16 | 4, 1000);
+        CHECK(!w.mayPass(1000, 1000));
+        // Chunk 3 came: 1, 2 (lost) and 3 have left; 4 is in flight.
+        w.acked(1u << 16 | 3, 2000);
+        CHECK_EQ(w.inFlight(), int64_t(1000));
+        CHECK(w.mayPass(1000, 2000));
+        // An older ack, or one never sent, moves nothing back.
+        w.acked(1u << 16 | 1, 3000);
+        w.acked(9u << 16 | 9, 3000);
+        CHECK_EQ(w.inFlight(), int64_t(1000));
+        // The first chunk always goes, whatever its size.
+        AroadWindow small(100);
+        small.acked(0, 0);
+        CHECK(small.mayPass(1112, 0));
+    }
+
+    SECTION("AroadWindow — a page silent for 150 ms with the window full opens it");
+    {
+        AroadWindow w(2000);
+        w.sent(0, 1000);
+        w.acked(0, 0);
+        w.sent(1, 1000);
+        w.sent(2, 1000);
+        CHECK(!w.mayPass(1000, 149'999));
+        CHECK_EQ(w.resets(), 0);
+        CHECK(w.mayPass(1000, 150'000));
+        CHECK_EQ(w.resets(), 1);
+        CHECK_EQ(w.inFlight(), int64_t(0));
+    }
+
+    SECTION("AroadPacer — the latest frame wins: unsent delta frames older than the newest go");
+    {
+        const auto job = [](uint16_t seq, uint16_t index, bool key = false, bool resend = false) {
+            AroadPacer::Job j;
+            j.seq = seq;
+            j.index = index;
+            j.keyframe = key;
+            j.resend = resend;
+            return j;
+        };
+        std::deque<AroadPacer::Job> q;
+        q.push_back(job(4, 7, false, true)); // a resend: kept
+        q.push_back(job(5, 3));              // frame 5 begun: kept
+        q.push_back(job(5, 4));
+        q.push_back(job(6, 0, true)); // a keyframe: kept
+        q.push_back(job(6, 1, true));
+        q.push_back(job(7, 0)); // unsent delta, older than 8: dropped
+        q.push_back(job(7, 1));
+        q.push_back(job(8, 0)); // the newest: kept
+        q.push_back(job(8, 1));
+        CHECK_EQ(AroadPacer::dropOlderFrames(q), 1);
+        CHECK_EQ(q.size(), size_t(7));
+        for (const auto& j : q)
+            CHECK(j.seq != 7);
+        // Only the newest frame left: nothing goes.
+        std::deque<AroadPacer::Job> one;
+        one.push_back(job(9, 0));
+        one.push_back(job(9, 1));
+        CHECK_EQ(AroadPacer::dropOlderFrames(one), 0);
+        CHECK_EQ(one.size(), size_t(2));
+    }
 }

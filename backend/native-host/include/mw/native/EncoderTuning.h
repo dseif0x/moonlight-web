@@ -424,6 +424,10 @@ struct EncoderTuning
     /// second, never under 50 Mbit/s; 0 sends each frame in one run. -1, the
     /// default: off (a Mac in Wi-Fi dropped more with it, W4).
     double aroadPace = -1;
+    /// The audio road's send window, KiB (plan « Wi-Fi », W4): at most this
+    /// many bytes sent and not yet acknowledged by the page (`aroadack`). 0,
+    /// the default: no window.
+    int aroadWindowKb = 0;
     /// Each video frame's way through the relay, written as a CSV next to the
     /// log when the session ends (plan « Wi-Fi : la vidéo qui attend dans
     /// SCTP », W1). false, the product: nothing kept.
@@ -502,6 +506,7 @@ struct EncoderTuning
                mutterDirect == Choice::Default && lossPermille == 0 && lossBurst == 0 &&
                sctpCongestion < 0 && floodKbps == 0 && floodBytes == 0 && !floodLikeVideo &&
                ultraSynthKb == 0 && !ultraUnordered && ultraMbps == 0 && aroadPace < 0 &&
+               aroadWindowKb == 0 &&
                !relayLog && paceMultiple == 0 && paceBurstKb == 0 && retransCutPermille < 0 &&
                sctpBufferKb == 0 && linkHoldMs == 0 && sctpMaxBurst < 0 && sctpScheduler < 0 &&
                !audioLog;
@@ -611,6 +616,7 @@ struct EncoderTuning
             std::snprintf(pace, sizeof pace, "aroadpace=%g", aroadPace);
             add(pace);
         }
+        if (aroadWindowKb > 0) add("aroadwin=" + std::to_string(aroadWindowKb));
         if (ultraUnordered) add("ultrachannel=unordered");
         if (relayLog) add("relaylog=1");
         if (paceMultiple > 0) add("pace=" + std::to_string(paceMultiple));
