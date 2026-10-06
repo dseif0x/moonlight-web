@@ -1512,6 +1512,44 @@ route audio, HEVC par la piste vidéo RTP.
 HEVC ralentit et que les images PyroWave deviennent assez petites. La suite :
 confirmer en répétant les passes, puis 120 images/s comme cadence d'Ultra.
 
+### 6.20 Trois passes de plus : l'avance se réduit, mais reste (06/10/2026, 20:10)
+
+Même banc qu'au §6.19, trois passes de plus de chaque, en ordre alterné
+(PyroWave, HEVC, HEVC, PyroWave, PyroWave, HEVC), 60 clics par passe.
+
+| Clic → drapeau, médiane, ms | Passe 0 | Passe 1 | Passe 2 | Passe 3 | Les 4 réunies |
+| --------------------------- | ------: | ------: | ------: | ------: | ------------: |
+| HEVC 120                    |    41,4 |    42,3 |    33,8 |    30,9 |          35,2 |
+| PyroWave 120                |    32,5 |    38,3 |    29,8 |    31,2 |      **32,8** |
+
+| Les 4 passes réunies, ms    | HEVC 120 (227 clics) | PyroWave 120 (229 clics) |
+| --------------------------- | -------------------: | -----------------------: |
+| Clic, médiane               |                 35,2 |                 **32,8** |
+| Clic, moyenne               |                 38,6 |                     34,4 |
+| Clic p90                    |                 49,0 |                     43,6 |
+| Hôte → dessin (e2e), passes |            12,7-13,2 |                10,2-11,2 |
+| Images répétées / min       |          3 230-3 410 |                  620-1 030 |
+
+- L'écart de −8,8 ms du §6.19 était en partie un tirage : le HEVC varie d'une
+  passe à l'autre (deux passes vers 42 ms, deux vers 31-34 ms). Réunies,
+  l'écart est de −2,4 ms en médiane, −4,2 ms en moyenne, −5,4 ms au p90.
+- Ce qui ne bouge pas d'une passe à l'autre : PyroWave dessine ~2 ms plus tôt
+  (e2e), répète quatre fois moins d'images, et sa queue est plus courte. Le
+  décodage GPU reste à 1,77 ms à chaque passe.
+- « Montré » varie trop entre passes (HEVC de 18,6 à 41,4 ms) pour servir de
+  juge ; le clic reste la mesure.
+
+**Verdict.** À 120 images/s, PyroWave est devant le HEVC sur ce client, de
+peu en médiane (~2-3 ms) et nettement sur la queue et la régularité. Ce n'est
+pas un écart de 9 ms ; c'est assez pour faire de 120 images/s la cadence
+d'Ultra. Le gros du reste est côté page (~20 ms de clic hors e2e, communs aux
+deux codecs).
+
+**Freebox Player POP (sondée le 06/10 au soir).** TV Bro (WebView Chrome 153,
+Android 10, Mali-G31) expose `navigator.gpu` mais `requestAdapter()` rend
+`null` : pas de WebGPU (Android le réserve à 12+). WebGL2 y est, avec
+`EXT_color_buffer_float`. PyroWave sur une TV passe donc par le repli WebGL2.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
