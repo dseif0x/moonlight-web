@@ -131,3 +131,11 @@ kernel): exactly RFC 8325. Down (the access point's choice):
 Same box: the DSCP is ignored. Behind the mesh link: precedence (TID =
 DSCP >> 3), so EF rides VI with the video and libdatachannel's AF11 (all
 SCTP) rides BK. The Wi-Fi was left disconnected, managed, with no profile.
+
+Again on 06/10, 11:19, from the bench switch (the UM790Pro moved onto it;
+interfaces `enp1s0`, `wlp2s0`): `3a:07:16:ec:68:b4`, the access point nearest
+the switch (-21 dBm), put every class in TID 0, so the switch hangs off it;
+`3a:07:16:07:1d:00`, the Freebox router behind the Wi-Fi 7 link, gave the
+precedence table again; `3a:07:16:e4:6f:40` was too weak to stay associated.
+From a wired port to a Wi-Fi client of the same box the DSCP is ignored;
+across the mesh link, precedence.

@@ -1325,7 +1325,7 @@ stack hands frames up as plain Data, without the QoS field (pktmon on the N95).
 
 **Down, the access point's choice:**
 
-| DSCP | near repeater `07:1d:00` (the wired port's own box, -26 dBm) | far repeaters `ec:68:b4` (the N95's) and `e4:6f:44`, behind the Wi-Fi 7 link |
+| DSCP | `07:1d:00`, the Freebox router: the UM790Pro's cable was on it (-26 dBm) | `ec:68:b4` (the N95's) and `e4:6f:44`, behind the Wi-Fi 7 link |
 |---|---|---|
 | DF 0, LE 1 | 0 (BE) | 0 (BE) |
 | CS1 8, **AF11 10** | 0 (BE) | **1 (BK)** |
@@ -1356,6 +1356,25 @@ stack hands frames up as plain Data, without the QoS field (pktmon on the N95).
 - Open: which box DualRTX's cable hangs off (the stream's real path to the
   N95), and what the box itself does. Both ask for a station with an IP and a
   sender elsewhere on the LAN.
+
+**Again from the bench's switch, 11:19-11:23** (the UM790Pro moved onto the
+switch DualRTX hangs off, Ubuntu, `enp1s0`/`wlp2s0`; `07:1d:00` is the router,
+whose MAC is the HESSID every BSS advertises):
+- **`ec:68:b4`, the access point nearest the switch (-21 dBm), the N95's when
+  it was in Wi-Fi: everything in TID 0 (BE)**, whatever the DSCP: the same
+  signature as the router's own port this morning, so the switch hangs off
+  this one;
+- `07:1d:00`, the router, behind the Wi-Fi 7 link (-68 dBm): precedence again
+  (CS1/AF11 → 1, CS2/AF21 → 2, CS3/AF31 → 3, AF4x → 4, CS5/VA/EF → 5, CS6 → 6,
+  CS7 → 7; a weak link delayed some frames into the next class's window);
+- `e4:6f:40` (the repeater the Freebox app lists at 192.168.1.121): too weak
+  from there (-71 dBm, 2.4 GHz), the association dropped, no reading.
+- **The model holds both ways: from a wired port to a Wi-Fi client of the
+  same box, the DSCP is ignored; across the Wi-Fi 7 link, precedence.** For
+  the bench: a Wi-Fi client on `ec:68` sees no effect of any mark, from any
+  host on the switch (Linux and macOS hosts included: their SCTP is not in BK
+  there); a client on the router or another box behind the link sees
+  precedence, AF11 in BK included.
 
 ### 06/10/2026 — The sound: the 60 ms floor costs ~25 ms on the Mac, and the N95 never plays most beeps (audio + DSCP plan, A1 bis and A2 begun)
 
@@ -1509,8 +1528,9 @@ What the measurements support, in order of the path:
   repeaters keep the mark; their DSCP → Wi-Fi queue table is still unread.
   Update (06/10, §3 « The Freebox's DSCP → Wi-Fi queue table »): read. Behind
   the mesh link, precedence (EF → VI, AF11 → BK, CS6 → VO); on the wired
-  port's own box, everything BE. The audio road would ride VI, not VO, and a
-  Linux or macOS host's SCTP rides BK.
+  port's own box, everything BE (checked from the router's port and from the
+  bench switch's box, `ec:68`). The audio road would ride VI, not VO, and a
+  Linux or macOS host's SCTP rides BK, but only for a client behind the link.
 
 ## 7. Knobs (bench keys, off by default unless said)
 
