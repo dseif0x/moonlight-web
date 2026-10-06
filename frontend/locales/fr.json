@@ -151,7 +151,7 @@
         "downloading": "Téléchargement de la mise à jour sur l'hôte…",
         "installing": "Installation de la mise à jour sur l'hôte…",
         "restarting": "Redémarrage de MoonlightWeb…",
-        "confirmOnHost": "En attente d'une confirmation sur le PC hôte…",
+        "confirmOnHost": "Saisissez le mot de passe de l'hôte dans la fenêtre ouverte sur son écran…",
         "failed": "La mise à jour a échoué",
         "timeout": "L'hôte n'est pas revenu à temps — vérifiez-le directement",
         "releaseNotes": "Nouveautés",

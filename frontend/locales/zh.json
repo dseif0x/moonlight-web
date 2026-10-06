@@ -151,7 +151,7 @@
         "downloading": "正在主机上下载更新…",
         "installing": "正在主机上安装更新…",
         "restarting": "正在重启 MoonlightWeb…",
-        "confirmOnHost": "等待在主机上确认…",
+        "confirmOnHost": "请在主机屏幕上弹出的窗口中输入主机密码…",
         "failed": "更新失败",
         "timeout": "主机未能及时恢复 — 请直接检查",
         "releaseNotes": "更新内容",

@@ -151,7 +151,7 @@
         "downloading": "Downloading the update on the host…",
         "installing": "Installing the update on the host…",
         "restarting": "Restarting MoonlightWeb…",
-        "confirmOnHost": "Waiting for a confirmation on the host PC…",
+        "confirmOnHost": "Type the host's password in the window open on its screen…",
         "failed": "The update failed",
         "timeout": "The host did not come back in time — check it directly",
         "releaseNotes": "What's new",
