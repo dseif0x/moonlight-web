@@ -1281,6 +1281,82 @@ règle de pare-feu), avec `MW_NATIVE_TUNING=pipeline=d3d12,enc12=pyrowave` et
 `mw_ultra=pyrowave`. Puis la même passe en HEVC, sur le même chemin, pour
 comparer.
 
+### 6.16 Sur un vrai câble : NetProbe, U1.2, U1.4 et UA.4 rejoués (06/10/2026, 14:34-15:30)
+
+DualRTX hôte, l'UM790Pro client sous Windows, en câble seul sur le commutateur
+de DualRTX (`Ethernet 2`, 1 Gbit/s). `build/` de 12:10. Tout passe sur l'écran
+virtuel du produit à 120 Hz (240 Hz pour U1.2 et le mode U), et non sur l'écran
+physique de l'Arc comme au §6.10. Il y a eu 23 passes, toutes enregistrées
+(`scratchpad/cable_run.sh`, noms `u1c-*`, `u14c-*`, `u03-umcab-*`).
+
+**Le chemin (NetProbe).** Aller-retour UDP à vide p50 0,38 ms (2,6 ms par le
+Wi-Fi 7), TCP 948 Mbit/s sur un ou quatre flux (74-90). L'UDP cadencé passe
+sans perte jusqu'à 500 Mbit/s, avec un délai en plus p99 ≤ 2,8 ms ; à
+800 Mbit/s, 0,4 % de pertes. Le commutateur virtuel Hyper-V de DualRTX ne
+compte pas. Le plafond de 150 Mbit/s du §6.10 venait bien du saut Wi-Fi.
+
+**U1.2, le DataChannel à haut débit** (source synthétique, 120 i/s) :
+
+| Taille | Demandé | Porté | Âge de la vidéo à côté |
+|---|---|---|---|
+| 350 Kio | 344 Mbit/s | 85 Mbit/s | 697 ms, RTT 151 ms |
+| 1 000 Kio | 983 Mbit/s | 528 Mbit/s | 257 ms |
+| 2 000 Kio | 1,97 Gbit/s | 534 Mbit/s, 9 perdues | — |
+| 1 000 Kio, canal non ordonné | | 524 Mbit/s | délai p95 365 ms (527) |
+| 1 000 Kio, `sctpburst=10` | | 513 Mbit/s | délai p95 376 ms |
+
+- L'association SCTP porte jusqu'à ~530 Mbit/s, trois fois les 170 de
+  PyroWave. Au-delà de ce qu'elle porte, la vidéo qui partage l'association
+  attend des centaines de millisecondes.
+- La passe à 350 Kio s'est effondrée à 85 Mbit/s : elle demandait pourtant
+  moins que ce que 1 000 Kio a porté. C'est la seule passe de ce genre ;
+  elle est à refaire, avec 200 Kio, avant d'en tirer quoi que ce soit.
+- Ultra 250 Kio à 60 i/s (123 Mbit/s, ci-dessous) tient sans gêner la vidéo.
+
+**U1.4, les trois transports** (médianes ; âge = âge du contenu montré,
+hôte → dessin = journal par image ; deux manches, sauf la route audio sous
+Ultra) :
+
+| | SCTP | Piste vidéo RTP | Route audio |
+|---|---|---|---|
+| HEVC seul, âge | 23,1 / 23,2 ms | 32,9 / 31,6 ms | 23,3 / 23,1 ms |
+| HEVC seul, hôte → dessin | 8,8 / 8,7 ms | 19,2 / 18,7 ms | 8,7 / 9,1 ms |
+| HEVC seul, clic | 47,3 / 47,1 ms | 55,2 / 59,6 ms | 48,7 / 42,2 ms |
+| Ultra 123 Mbit/s à côté, âge | 23,3 / 22,1 / 22,7 ms | 31,3 / 31,6 ms | 22,5 ms |
+| Ultra, délai en plus du flux Ultra p50 | 7,0 / 5,9 / 8,0 ms | 13,4 / 16,3 ms | 6,6 ms |
+
+- Sur le câble, SCTP ne pénalise plus la vidéo quand Ultra passe à côté (en
+  Wi-Fi : 125 ms, §6.11). La route audio fait jeu égal avec lui.
+- La piste vidéo garde ses 9-10 ms de retenue (le métronome de Chrome, §6.11),
+  et Chrome y envoie toujours ses PLI en boucle.
+
+**5 % de pertes injectées (HEVC)** :
+
+| | Âge | Images dessinées par seconde | Clics vus | Perdus |
+|---|---|---|---|---|
+| Route audio (`MW_AROAD_DROP=50`) | 24,5 ms | 58,7 | 29/30 | 0 % |
+| SCTP (`loss=50`) | 22,6 ms | 31,9 | 20/30 | 6,8 % |
+
+La réparation de la route audio coûte +1,3 ms et ne perd rien. SCTP en perd
+une sur deux, comme en Wi-Fi.
+
+**UA.4, l'Auto détecté sur le câble** (cellule Arc, deux manches) :
+
+| | Mode | Âge montré | p99 |
+|---|---|---|---|
+| D | Auto détecté | 14,4 / 14,6 ms | 21,7 / 22,0 ms |
+| U | 120 i/s forcés, écran virtuel à 240 Hz | 19,4 / 18,5 ms | 32,1 / 25,2 ms |
+
+L'Auto monte à 120 i/s et bat l'Ultra forcé de 4-5 ms.
+
+**Ce que ça tranche.**
+- Pour U1 : sur 1 GbE, le DataChannel a la place de PyroWave. Le plafond du
+  §6.8 venait du chemin, pas de SCTP.
+- La recommandation du §6.11 tient. La route audio devient la case RTP de
+  l'interrupteur. Elle égale SCTP sur un lien propre, ne perd rien sous
+  pertes, et ne retient rien comme la piste vidéo.
+- Reste à comprendre la passe à 350 Kio.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
@@ -1337,3 +1413,10 @@ maintenant redemander un morceau perdu. Même quand 5 % des paquets se perdent,
 chaque image arrive, avec 2 à 3 ms de retard en plus. Le DataChannel, lui, en
 perd une sur trois. Rien de tout cela n'est encore activé pour les joueurs :
 la mesure sur câble vient d'abord, puis Bruno choisit, codec par codec.
+
+Mesuré sur câble (06/10) : sur un vrai câble Ethernet, le DataChannel d'aujourd'hui
+suffit déjà. L'image a le même âge par la route audio et par le DataChannel,
+même quand un flux Ultra de 120 Mbit/s passe à côté. La route audio ne se
+distingue que quand des paquets se perdent : elle garde toutes les images, et
+le DataChannel en perd une sur deux. Sur ce câble, l'« Auto » fait mieux que le
+120 i/s forcé, de 4 à 5 ms.
