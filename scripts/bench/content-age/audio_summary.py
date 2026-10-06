@@ -64,7 +64,7 @@ def main():
         i = args.index("--skip")
         skip = float(args[i + 1])
         del args[i:i + 2]
-    paths = sorted({p for a in args for p in (glob.glob(a) or [a])})
+    paths = sorted({p for a in args for p in (glob.glob(a) or ([a] if os.path.exists(a) else []))})
     print("%-58s %4s %6s %6s %6s %6s %5s %5s %6s %4s %6s %4s %5s %5s %5s %5s %7s" % (
         "pass", "s", "buf", "p90", "target", "min", "jit", "p90", "pkts", "lost",
         "conc%", "ev", "ins%", "rem%", "disc", "flush", "energy"))

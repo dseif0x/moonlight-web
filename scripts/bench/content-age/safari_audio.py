@@ -11,7 +11,8 @@ and plugged in. This script starts `safaridriver -p 4444` on the Mac over ssh,
 tunnels it to this machine, and drives Safari through W3C WebDriver.
 
 Each run: a --dev of this machine (its own rendezvous link: an iPhone refuses
-the LAN address's certificate on the signalling socket), the PIN page filled,
+the LAN address's certificate on the signalling socket), the PIN page filled
+(a WebDriver session starts with no site data: a PIN every time),
 `mw_audio_target` set (a number, or `off`; `60` = today's default, the key
 removed), the Arc's screen streamed with the bench page on it, `--secs` of
 `mwAudio.csv()` kept as `<prefix>-<target>-r<k>.audio.csv` next to the other
@@ -39,7 +40,6 @@ import gpu_load  # noqa: E402
 
 OUT = LM.OUT
 WD_PORT = 4444
-ELEMENT = "element-6066-11e4-a52f-4ad83a40d1c3"
 NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -69,10 +69,6 @@ class WebDriver:
 
     def go(self, url):
         self.s("POST", "/url", {"url": url}, timeout=120)
-
-    def click(self, css):
-        el = self.s("POST", "/element", {"using": "css selector", "value": css})
-        self.s("POST", "/element/%s/click" % el[ELEMENT], {})
 
     def quit(self):
         try:
@@ -119,9 +115,12 @@ def unlock_and_wait(wd, pin, tries=40):
                 set(document.getElementById('login-pin-input'), arguments[1]);
                 const k = document.getElementById('login-remember');
                 if (k && !k.checked) k.click();
-                const form = document.getElementById('login-pin-input').closest('form');
-                const b = form && form.querySelector('button[type=submit], button:not([type])');
-                if (b) b.click(); else if (form) form.requestSubmit();""", "bench-safari", pin)
+                // No <form> around the PIN page (06/10/2026, iOS 26.5): its
+                // button, by id, then by its label in either language.
+                const b = document.getElementById('btn-login-unlock') ||
+                    [...document.querySelectorAll('button')].find(e =>
+                        /^(unlock|déverrouiller)$/i.test(e.textContent.trim()));
+                if (b) b.click();""", "bench-safari", pin)
             time.sleep(8)
             continue
         time.sleep(2)
@@ -154,7 +153,11 @@ def one_run(wd, link, pin, index, target, secs, tag):
     time.sleep(4)
     unlock_and_wait(wd, pin)
     sel = tile(wd, index)
-    wd.click(sel)
+    # A WebDriver tap on the tile does nothing on iOS (06/10/2026: neither the
+    # element click nor touch actions reached the list's click handler); the
+    # element's own click() launches.
+    wd.js("const el = document.querySelector(arguments[0]);"
+          " el.scrollIntoView({ block: 'center' }); el.click();", sel)
     end = time.time() + 60
     while time.time() < end:
         if wd.js("return !!document.querySelector('canvas, video.stream-video, #stream-video')"):
@@ -215,7 +218,13 @@ def main():
         run.content_start("scroll.html?band=time&px=600", probe=True)
         caps = {"browserName": "Safari", "platformName": a.platform}
         wd = WebDriver(WD_PORT, caps)
-        for k, target in enumerate(a.runs.split(",")):
+        runs = a.runs.split(",")
+        # Safari 26.5 on iOS 18.7 has no jitterBufferTarget (06/10/2026): the
+        # page's floor never applies there, and one pass says all there is.
+        if not wd.js("return 'jitterBufferTarget' in RTCRtpReceiver.prototype"):
+            print("no jitterBufferTarget in this Safari: one default pass only", flush=True)
+            runs = ["60"]
+        for k, target in enumerate(runs):
             tag = "%s-%s-r%d" % (a.prefix, target, k)
             print("==", tag, time.strftime("%H:%M:%S"), flush=True)
             # A PIN is single-use: a fresh one for each run that meets the PIN page.
