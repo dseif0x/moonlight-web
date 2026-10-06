@@ -1483,6 +1483,35 @@ NVENC et GeForce NOW). Notre résultat est cohérent, pas anormal.
    sans le battre nettement. Son terrain reste les clients dont le décodeur
    retient des images (TV, mobiles, certains Mac) et les liens avec pertes.
 
+### 6.19 PyroWave à 120 images/s : il passe devant le HEVC (06/10/2026, 19:40)
+
+Même banc qu'au §6.18 (RTX → câble → UM790Pro, écran virtuel à 120 Hz), mais
+le flux à 120 images/s, et 60 clics par passe au lieu de 30. PyroWave par la
+route audio, HEVC par la piste vidéo RTP.
+
+| Médianes, ms         | HEVC 120 | PyroWave 120 |
+| -------------------- | -------: | -----------: |
+| Clic → drapeau       |     41,4 |     **32,6** |
+| Clic p90             |     59,0 |         43,7 |
+| Montré (âge à l'œil) |     37,2 |         24,9 |
+| Hôte → dessin (e2e)  |     13,0 |         10,6 |
+| Décodage GPU (pyro)  |        — |         1,77 |
+| Présentation GPU     |        — |         0,33 |
+| Attente du GPU       |        — |          4,6 |
+
+- À 120 images/s, chaque image PyroWave fait la moitié des octets : la
+  sérialisation tombe vers 1,4 ms.
+- Le GPU de la 780M décode en 1,77 ms au lieu de 3,15 ms à 60 images/s : la
+  charge continue garde ses horloges hautes.
+- Le HEVC à 120 images/s se dessine tard (« drawn » 33 ms, 3 200 images
+  répétées par minute) : le décodeur ou le dessin de la page ne suit pas la
+  cadence sur ce client. PyroWave n'en répète que 800.
+- L'écart au clic (−8,8 ms sur 60 clics) dépasse le bruit (±4 ms à 30 clics).
+
+**Verdict.** La promesse de PyroWave tient à haute cadence : c'est là que le
+HEVC ralentit et que les images PyroWave deviennent assez petites. La suite :
+confirmer en répétant les passes, puis 120 images/s comme cadence d'Ultra.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
