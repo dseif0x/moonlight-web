@@ -1191,8 +1191,14 @@ give-up changed nothing. Counters added to `pass.py` (c8579820): `whole`
 - **What it means:** with v2, the audio road on a Mac in Wi-Fi gets close to
   SCTP's clicks (50-54 at Auto, 56-59 at 24 Mbit/s with v1), at ~66-73 ms. A
   smaller budget (10-15%) may trim the extra drops; it is to be measured at the
-  next Mac slot. Whether v2 is the default inside the audio road is the POC
-  session's call; the audio road itself is not the default road.
+  next Mac slot.
+- **Decision (POC session, 06/10):** v2 stays the default within the audio
+  road, with no code change. It fails the rule set beforehand ("Auto drops no
+  more than the witness": they are 1.45-1.67×) and is kept anyway. The clicks
+  are what the user feels, the median does not move (~72 ms), and the audio
+  road is not the product's default road. Open, at a later Mac slot: a budget
+  of 10-15%, then the audio road with v2 against SCTP at Auto in the same
+  session.
 
 ### 05/10/2026 — DSCP on the wire and on the air, and the host's share of a sound (audio + DSCP plan, D0 and A1)
 
