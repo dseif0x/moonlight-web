@@ -3164,16 +3164,25 @@ void DataChannelRelay::resendAudioRoad(const QJsonObject& msg)
 {
     // {"type":"aroadnack","t":"v"|"u","s":seq,"i":[indexes]} from the page's
     // transform worker: the chunks it saw missing, sent again as they went.
+    // "all":1 names a frame none of whose chunks came (a hole in the seqs: a
+    // small delta is one or two chunks, one loss on the air takes it whole),
+    // so the page knows neither its indexes nor how many: all of them go.
     const bool ultra = msg["t"].toString() == QLatin1String("u");
     const std::shared_ptr<rtc::Track> track = ultra ? m_UltraTrack : m_VideoTrack;
     AudioRoadHistory& history = ultra ? m_UltraRoadHistory : m_VideoRoadHistory;
     if (!track || !track->isOpen()) return;
     const uint16_t seq = static_cast<uint16_t>(msg["s"].toInt());
-    const QJsonArray indexes = msg["i"].toArray();
+    const bool all = msg["all"].toInt() != 0;
+    QJsonArray indexes = msg["i"].toArray();
     std::lock_guard<std::mutex> lk(history.mutex);
     for (const auto& f : history.frames) {
         if (f.seq != seq) continue;
         rtc::FrameInfo info(f.timestamp);
+        if (all) {
+            indexes = QJsonArray();
+            for (size_t i = 0; i < f.chunks.size(); ++i)
+                indexes.append(static_cast<int>(i));
+        }
         int n = 0;
         for (const QJsonValue& v : indexes) {
             const int i = v.toInt(-1);
