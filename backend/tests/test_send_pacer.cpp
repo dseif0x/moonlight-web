@@ -171,6 +171,26 @@ void run_send_pacer_tests()
         CHECK_EQ(w.inFlight(), int64_t(0));
     }
 
+    SECTION("AroadResendBudget — a fifth of what was sent, a floor under it");
+    {
+        AroadResendBudget b(0.2, 1000);
+        // Nothing sent yet: the floor.
+        CHECK(b.mayResend(1000, 1));
+        CHECK(!b.mayResend(1, 1));
+        CHECK_EQ(b.refused(), int64_t(1));
+        // 100 KB sent in the next period: (100,000 + 0) / 2 x 0.2 = 10,000.
+        b.sent(100'000, 100'001);
+        CHECK(b.mayResend(10'000, 100'002));
+        CHECK(!b.mayResend(1, 100'003));
+        // The period after: the previous one still counts, its resends do not.
+        b.sent(100'000, 200'001);
+        CHECK(b.mayResend(20'000, 200'002));
+        CHECK(!b.mayResend(1, 200'003));
+        // A long silence: back to the floor.
+        CHECK(b.mayResend(1000, 900'000));
+        CHECK(!b.mayResend(1, 900'001));
+    }
+
     SECTION("AroadPacer — the latest frame wins: unsent delta frames older than the newest go");
     {
         const auto job = [](uint16_t seq, uint16_t index, bool key = false, bool resend = false) {

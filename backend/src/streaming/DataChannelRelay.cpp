@@ -3154,6 +3154,10 @@ void DataChannelRelay::sendAudioRoad(const std::shared_ptr<rtc::Track>& track,
         kept.chunks.push_back(std::move(chunk));
     }
     m_AroadSent.fetch_add(static_cast<int64_t>(count), std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> budget(m_AroadBudgetMutex);
+        m_AroadBudget.sent(size + count * kHead, steadyUs());
+    }
     std::lock_guard<std::mutex> lk(history.mutex);
     history.frames.push_back(std::move(kept));
     while (history.frames.size() > history.maxFrames)
@@ -3187,6 +3191,11 @@ void DataChannelRelay::resendAudioRoad(const QJsonObject& msg)
         for (const QJsonValue& v : indexes) {
             const int i = v.toInt(-1);
             if (i < 0 || i >= static_cast<int>(f.chunks.size())) continue;
+            {
+                std::lock_guard<std::mutex> budget(m_AroadBudgetMutex);
+                if (!m_AroadBudget.mayResend(f.chunks[static_cast<size_t>(i)].size(), steadyUs()))
+                    continue;
+            }
             try {
                 if (m_AroadPacer)
                     m_AroadPacer->send(track, f.chunks[static_cast<size_t>(i)], f.timestamp, true);
@@ -3203,7 +3212,11 @@ void DataChannelRelay::resendAudioRoad(const QJsonObject& msg)
         m_AroadResent.fetch_add(n, std::memory_order_relaxed);
         if (history.resent == n || history.resent / 200 != (history.resent - n) / 200)
             qInfo() << "[DataChannelRelay] audio road" << (ultra ? "Ultra" : "video")
-                    << "chunks resent so far:" << history.resent;
+                    << "chunks resent so far:" << history.resent
+                    << "| refused by the budget:" << [this]() {
+                           std::lock_guard<std::mutex> budget(m_AroadBudgetMutex);
+                           return m_AroadBudget.refused();
+                       }();
         return;
     }
 }

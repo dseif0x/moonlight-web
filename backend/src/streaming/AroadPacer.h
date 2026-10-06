@@ -145,6 +145,68 @@ private:
     std::deque<Send> m_Sends;
 };
 
+// The road's resend budget (plan « Wi-Fi », W4): resends at most `share` of
+// the bytes first sent over the last kPeriodUs, never under `floorBytes`.
+// The page's asks come when its socket overflows, and resending all it asks
+// into that same full socket fed a storm on a Mac in Wi-Fi (06/10/2026:
+// 23,000 chunks resent a pass, 14,053 kernel drops against 948-2,447). What
+// the budget refuses is lost; the page gives up and asks for a keyframe.
+class AroadResendBudget
+{
+public:
+    static constexpr int64_t kPeriodUs = 100'000;
+
+    AroadResendBudget(double share, int64_t floorBytes)
+        : m_Share(share)
+        , m_Floor(floorBytes)
+    {}
+
+    void sent(size_t bytes, int64_t nowUs)
+    {
+        roll(nowUs);
+        m_Sent += static_cast<int64_t>(bytes);
+    }
+
+    /// Whether @p bytes may be resent now; counted when they may.
+    bool mayResend(size_t bytes, int64_t nowUs)
+    {
+        roll(nowUs);
+        const int64_t cap = (std::max)(
+            m_Floor, static_cast<int64_t>(m_Share * static_cast<double>(m_Sent + m_PrevSent) / 2));
+        if (m_Resent + static_cast<int64_t>(bytes) > cap) {
+            ++m_Refused;
+            return false;
+        }
+        m_Resent += static_cast<int64_t>(bytes);
+        return true;
+    }
+
+    int64_t refused() const { return m_Refused; }
+
+private:
+    // Two periods: the cap follows the last full one and the one under way.
+    void roll(int64_t nowUs)
+    {
+        if (m_StartUs == 0) m_StartUs = nowUs;
+        while (nowUs - m_StartUs >= kPeriodUs) {
+            m_PrevSent = m_Sent;
+            m_Sent = 0;
+            m_Resent = 0;
+            m_StartUs += kPeriodUs;
+            if (nowUs - m_StartUs >= kPeriodUs) {
+                m_PrevSent = 0;
+                m_StartUs = nowUs;
+            }
+        }
+    }
+
+    const double m_Share;
+    const int64_t m_Floor;
+    int64_t m_StartUs = 0;
+    int64_t m_Sent = 0, m_PrevSent = 0, m_Resent = 0;
+    int64_t m_Refused = 0;
+};
+
 class AroadPacer
 {
 public:
