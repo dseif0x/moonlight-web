@@ -1208,6 +1208,24 @@ private:
     bool buildPipeline(int outputWidth, int outputHeight, std::string& error, bool keepHeld = false)
     {
         VideoPipelineChoice choice = chooseVideoPipeline(pipelineFacts());
+        // PyroWave (POC Ultra) has no D3D11 twin, and a page in Ultra mode
+        // decodes nothing else: HEVC in its place would be a silent black
+        // stream. It is strict12 by nature, failing out loud.
+        const bool strict =
+            m_Config.tuning.strict12 || m_Config.tuning.enc12 == EncoderTuning::Encoder12::Pyrowave;
+        const char* strictWhy = m_Config.tuning.strict12 ? "strict12" : "enc12=pyrowave";
+        if (m_Config.tuning.enc12 == EncoderTuning::Encoder12::Pyrowave &&
+            choice.pipeline != VideoPipeline::D3d12) {
+            error =
+                "enc12=pyrowave runs on the D3D12 route only (pipeline=d3d12): " + choice.reason;
+            return false;
+        }
+        if (choice.pipeline == VideoPipeline::D3d12 && m_D3d12Failed && strict) {
+            error = std::string(strictWhy) +
+                    ": no D3D11 fallback, D3D12 failed earlier in this session (" +
+                    m_D3d12FailedWhy + ")";
+            return false;
+        }
         if (choice.pipeline == VideoPipeline::D3d12 && m_D3d12Failed) {
             choice.pipeline = VideoPipeline::D3d11;
             choice.route = "D3D11";
@@ -1232,8 +1250,8 @@ private:
                 m_D3d12NoIntraRefresh = true;
                 why = "its encoder grants no intra-refresh, which this stream requires";
             }
-            if (m_Config.tuning.strict12) {
-                error = "strict12: the D3D12 chain does not build: " + why;
+            if (strict) {
+                error = std::string(strictWhy) + ": the D3D12 chain does not build: " + why;
                 return false;
             }
             choice.pipeline = VideoPipeline::D3d11;
@@ -1243,8 +1261,8 @@ private:
                                     : ", D3D11 runs: the D3D12 build failed (" + why + ")";
             // The held copy, if any, was the D3D12 chain's.
             keepHeld = false;
-        } else if (choice.refused && m_Config.tuning.strict12) {
-            error = "strict12: " + choice.reason;
+        } else if (choice.refused && strict) {
+            error = std::string(strictWhy) + ": " + choice.reason;
             return false;
         }
         if (!usePipeline(VideoPipeline::D3d11, EncoderTuning::Encoder12::VideoEncode, error) ||
