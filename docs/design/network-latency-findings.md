@@ -1365,6 +1365,25 @@ itself (06:08-06:20, the house's Wi-Fi busy again), far above 60.
 - next: the page now logs NetEq's discarded packets, flushes and played
   energy, to place the loss inside or after the browser; then a calm link.
 
+**A2 with Bruno, 09:04-09:45** (Windows native host DualRTX, a quiet morning;
+`b0a5ef01`):
+- **Mac, Chrome in Wi-Fi**, four passes alternated: with the 60 ms floor the
+  buffer held 73.2 and 72.3 ms; without it (`mw_audio_target=off`) 30.3 and
+  40.6 ms. **The floor costs ~37 ms on every sound there**, and removing it
+  brought no concealment and no loss (0-0.02 %, 0-1 packet per pass). NetEq's
+  own target: 20-40 ms;
+- **iPhone, Safari 26.5 on iOS 18.7** (driven by `safaridriver` over USB from
+  the Mac, `safari_audio.py`): **no `jitterBufferTarget` in this Safari**, so
+  the page's floor never applied. NetEq targets 20 ms and holds 39 ms, jitter
+  1 ms, no loss, no concealment (81 s);
+- Safari on the Mac: not measured (its "Allow remote automation" setting is
+  off);
+- with this morning's 06:00-06:08 passes of session 25 and the local client
+  of A0 (target 40 → 33-37 ms), the A2 gate's answer: on a Chromium client
+  with a quiet link the floor sits well above what NetEq wants, and lowering
+  it is worth 25-37 ms per sound; under load (the N95) NetEq goes above the
+  floor by itself and the floor does nothing; Safari ignores it.
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
