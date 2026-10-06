@@ -65,22 +65,29 @@ describe('rtpVideoTransformWorker — the audio road repair', () => {
         r.give(chunk(4, 0, 2)); // frame 4's chunk 1 lost
         await tick(1);
         r.give(chunk(5, 0, 1)); // a newer frame: frame 4's chunk 1 asked for
-        await tick(45);
+        await tick(60);
         const nacks = r.nacks();
-        expect(nacks.filter((n) => n.all && !n.reask).map((n) => n.s)).toEqual([1, 2]);
+        // The hole asked for whole, once.
+        expect(nacks.filter((n) => n.all).map((n) => n.s)).toEqual([1, 2]);
+        expect(nacks.some((n) => n.all && n.reask)).toBe(false);
+        // The chunk asked for, then once again.
         expect(nacks.some((n) => n.s === 4 && !n.reask && n.i[0] === 1)).toBe(true);
-        // Coarse timers (Windows: 15.6 ms) fit one or two asks again.
-        for (const s of [1, 2, 4]) {
-            const again = nacks.filter((n) => n.reask && n.s === s).length;
-            expect(again).toBeGreaterThanOrEqual(1);
-            expect(again).toBeLessThanOrEqual(2);
-        }
+        expect(nacks.filter((n) => n.reask && n.s === 4).length).toBe(1);
         r.posts.length = 0;
         r.give(chunk(1, 0, 1));
         r.give(chunk(2, 0, 1));
         r.give(chunk(4, 1, 2));
         await tick(30);
         expect(r.nacks()).toEqual([]);
+    });
+
+    it('gives up on a longer hole: a burst of the socket, not asked for', async () => {
+        const r = await road({});
+        r.give(chunk(0, 0, 1));
+        await tick(1);
+        r.give(chunk(4, 0, 1)); // seqs 1-3: a hole of 3
+        await tick(5);
+        expect(r.nacks().some((n) => n.all)).toBe(false);
     });
 
     it('asks nothing whole nor twice with mw_aroad_reask=0 (reask: false)', async () => {

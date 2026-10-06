@@ -32,16 +32,19 @@ const HEAD = 12;
 const ACK_MS = 5;
 /** …or after this many bytes, for the host's send window (aroadwin=). */
 const ACK_BYTES = 16 * 1024;
-/** A chunk or frame asked for and still missing is asked again after this
- * long (ms), at most REASK_TRIES more times: the ask or its answer may be
- * lost too. */
-const REASK_MS = 8;
-const REASK_TRIES = 2;
-/** The most frames one hole in the seqs is asked for. */
-const HOLE_MAX = 32;
-/** GIVE_UP_MS when asks are repeated: room for them and their answers
- * (REASK_TRIES + 1 asks REASK_MS apart, then a Wi-Fi round trip). */
-const GIVE_UP_REPAIR_MS = 30;
+/** A chunk asked for and still missing is asked again after this long
+ * (ms), at most REASK_TRIES more times: the ask or its answer may be lost
+ * too. Past a Wi-Fi round trip and a resend, so that an answer on its way is
+ * not asked for twice: at 8 ms and twice, a Mac whose socket overflowed got
+ * a storm (06/10/2026: 23,000 chunks resent a pass). */
+const REASK_MS = 20;
+const REASK_TRIES = 1;
+/** The longest hole in the seqs asked for whole, once. One or two small
+ * frames lost on the air; a longer hole is a burst of the socket's own drops,
+ * which resending into the same socket would only feed: given up on. */
+const HOLE_MAX = 2;
+/** GIVE_UP_MS while repairing: room for an ask again and its answer. */
+const GIVE_UP_REPAIR_MS = 40;
 
 /**
  * The bench's other road (U1.4 ter, tracks "vaudio" / "uaudio"): each frame
@@ -58,7 +61,8 @@ const GIVE_UP_REPAIR_MS = 30;
  * alone and go as they complete.
  * A frame none of whose chunks came (a small delta is one or two chunks: one
  * loss on the air takes it whole) shows only as a hole in the seqs: it is
- * asked for whole (`all`), the host sending every chunk of it. Asks still
+ * asked for whole (`all`, once, a hole of HOLE_MAX frames at most), the host
+ * sending every chunk of it within its resend budget. Chunk asks still
  * unanswered after REASK_MS go again (`reask`). Off with the page's bench key
  * mw_aroad_reask=0 (the witness of plan « Wi-Fi », W4).
  * The last chunk received is named back (`ack`, every ACK_MS or ACK_BYTES): a
@@ -123,17 +127,10 @@ function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS, repair = true) {
         reaskTimer = 0;
         const now = performance.now();
         let pending = false;
-        for (const [s, h] of holes) {
-            if (!wanted(s) || open.has(s) || ready.has(s) || h.tries >= REASK_TRIES) {
-                holes.delete(s);
-                continue;
-            }
-            pending = true;
-            if (now - h.at < REASK_MS) continue;
-            h.at = now;
-            h.tries++;
-            self.postMessage({ mid: outMid, nack: { t: tag, s, i: [], all: 1, reask: 1 } });
-        }
+        // A frame asked for whole is not asked again: its answer is a whole
+        // frame more into a socket that may be full.
+        for (const s of holes.keys())
+            if (!wanted(s) || open.has(s) || ready.has(s)) holes.delete(s);
         for (const [s, f] of open) {
             const want = [];
             for (const [k, a] of f.asked) {
