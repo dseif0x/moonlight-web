@@ -1647,6 +1647,40 @@ d'horloge par image** (p50, 23 au p99 : décodage + présentation + lecture
 d'un pixel, sans minuteur GPU) : assez pour 30 à 50 i/s, pas pour 60 ; sur
 iPhone, la voie est WebGPU.
 
+### 6.23 Décoder par tranches, pendant que l'image arrive (06/10/2026, 23:20)
+
+Première piste du §6.18. L'hôte envoie déjà les blocs dans l'ordre de leur
+index, du niveau le plus grossier au plus fin : la page n'a donc pas besoin de
+l'image entière pour commencer (`2e3c70a3`).
+
+- **Le worker de la route audio** passe à la page le début d'une image encore
+  en route, par morceaux contigus d'au moins 48 Kio (clés de banc
+  `mw_ultra_slices=1`, `mw_ultra_slice_kb`). Le dernier morceau ne part jamais
+  seul : l'image entière suit comme avant.
+- **`UltraPlayer`** soumet chaque morceau au GPU dès qu'il arrive. Il
+  déquantifie les blocs déjà là, puis inverse l'ondelette de chaque niveau
+  devenu complet. À l'arrivée de l'image, il ne reste que le dernier morceau,
+  le niveau le plus fin et l'affichage. S'il manque un morceau, ou si une
+  image par tranches attend encore le GPU, l'image suivante se décode
+  entière, comme avant.
+- **Le labo** (`decoder_lab.py --slices N`) coupe chaque image en N morceaux
+  n'importe où, au milieu des blocs. Il vérifie le décodage et chronomètre ce
+  que laisse le dernier morceau.
+
+| GPU, 1080p, `game10` / `text10` | Image entière | 4 morceaux | 8 | 16 |
+|---|---|---|---|---|
+| Écart à la référence | 1 | 1 | 1 | 1 |
+| Reste à la dernière tranche, p50 | 1,98 / 1,97 ms | 1,46 / 0,82 ms | 0,82 / 0,78 ms | 0,78 / 0,77 ms |
+
+- Le résultat est exact, sur SwiftShader comme sur la 780M.
+- À 8 morceaux, il ne reste que **0,8 ms au lieu de 2,0 ms**. Le plancher est
+  l'ondelette inverse du niveau le plus fin, qui attend sa dernière bande.
+- Pour descendre sous ce plancher, l'hôte devrait entrelacer les rangées de
+  blocs des trois bandes du niveau fin. La page pourrait alors inverser ce
+  niveau par bandes horizontales.
+- Reste la passe de bout en bout sur le câble, par tranches contre image
+  entière, pour voir ce que l'écran en tire.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
