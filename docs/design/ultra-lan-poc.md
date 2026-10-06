@@ -1642,7 +1642,10 @@ principal y tourne sans repli : écart 1 avec la référence (PSNR ≥ 65 dB),
 par `tailscale serve` (HTTPS du réseau privé ; elle affiche désormais aussi
 ses erreurs, faute de DevTools sur un téléphone). Le décodage n'est donc pas
 l'obstacle sur un iPhone ; le débit l'est, PyroWave restant réservé à
-l'Ethernet.
+l'Ethernet. Le repli WebGL2 y est juste lui aussi (écart 1), en **19 ms
+d'horloge par image** (p50, 23 au p99 : décodage + présentation + lecture
+d'un pixel, sans minuteur GPU) : assez pour 30 à 50 i/s, pas pour 60 ; sur
+iPhone, la voie est WebGPU.
 
 ## 7. Concrètement, pour l'utilisateur
 
