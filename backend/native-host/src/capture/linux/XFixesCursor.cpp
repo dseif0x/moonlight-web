@@ -22,6 +22,9 @@
 #include <dlfcn.h>
 #include <poll.h>
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstring>
 #include <mutex>
 #include <set>
@@ -88,6 +91,8 @@ struct XFixesCursor::Api
     int (*queryPointer)(XDisplay*, XWindow, XWindow*, XWindow*, int*, int*, int*, int*,
                         unsigned int*) = nullptr;
     int (*free)(void*) = nullptr;
+    int (*getGeometry)(XDisplay*, XWindow, XWindow*, int*, int*, unsigned int*, unsigned int*,
+                       unsigned int*, unsigned int*) = nullptr;
     IoErrorHandler (*setIOErrorHandler)(IoErrorHandler) = nullptr;
     void (*setIOErrorExitHandler)(XDisplay*, void (*)(XDisplay*, void*), void*) = nullptr;
     int (*fixesQueryExtension)(XDisplay*, int*, int*) = nullptr;
@@ -111,6 +116,7 @@ struct XFixesCursor::Api
                    load(x11, api.connectionNumber, "XConnectionNumber") &&
                    load(x11, api.pending, "XPending") && load(x11, api.nextEvent, "XNextEvent") &&
                    load(x11, api.queryPointer, "XQueryPointer") && load(x11, api.free, "XFree") &&
+                   load(x11, api.getGeometry, "XGetGeometry") &&
                    load(x11, api.setIOErrorHandler, "XSetIOErrorHandler") &&
                    load(x11, api.setIOErrorExitHandler, "XSetIOErrorExitHandler") &&
                    load(fixes, api.fixesQueryExtension, "XFixesQueryExtension") &&
@@ -195,6 +201,24 @@ void XFixesCursor::run()
     const Api* api = Api::get();
     const int fd = api->connectionNumber(m_Display);
     bool shapeDue = true;
+
+    // gamescope shows the focused window scaled to fill its output, aspect kept
+    // and centred — a game at 1366x768 fills a 1920x1080 picture — while X
+    // reports the pointer in that window's own pixels. Drawn as read, the
+    // pointer sat up and left of where the game saw it, by the ratio (bench:
+    // ACC at 768p in a 1080p stream). The root is the output: gamescope keeps
+    // it at its own size whatever mode a game asks for.
+    unsigned int rootW = 0, rootH = 0;
+    {
+        XWindow r = 0;
+        int rx = 0, ry = 0;
+        unsigned int border = 0, depth = 0;
+        api->getGeometry(m_Display, m_Root, &r, &rx, &ry, &rootW, &rootH, &border, &depth);
+    }
+    XWindow scaledWindow = 0;
+    int winX = 0, winY = 0;
+    unsigned int winW = 0, winH = 0;
+    auto lastGeometry = std::chrono::steady_clock::time_point{};
     while (!m_Stopping.load() && !m_Broken.load()) {
         pollfd p{fd, POLLIN, 0};
         ::poll(&p, 1, 8);
@@ -237,13 +261,35 @@ void XFixesCursor::run()
         }
 
         XWindow rootReturn = 0, child = 0;
-        int rootX = 0, rootY = 0, winX = 0, winY = 0;
+        int rootX = 0, rootY = 0, childX = 0, childY = 0;
         unsigned int mask = 0;
-        if (api->queryPointer(m_Display, m_Root, &rootReturn, &child, &rootX, &rootY, &winX, &winY,
-                              &mask)) {
+        if (api->queryPointer(m_Display, m_Root, &rootReturn, &child, &rootX, &rootY, &childX,
+                              &childY, &mask)) {
+            // The window under the pointer is the one gamescope shows. Its
+            // size is read again when it changes and every quarter second: a
+            // game switches resolution without a new window.
+            const auto now = std::chrono::steady_clock::now();
+            if (child != scaledWindow || now - lastGeometry > std::chrono::milliseconds(250)) {
+                scaledWindow = child;
+                lastGeometry = now;
+                winW = winH = 0;
+                XWindow r = 0;
+                unsigned int border = 0, depth = 0;
+                if (child == 0 || !api->getGeometry(m_Display, child, &r, &winX, &winY, &winW,
+                                                    &winH, &border, &depth))
+                    winW = winH = 0;
+            }
+            double px = rootX, py = rootY;
+            if (winW > 0 && winH > 0 && rootW > 0 && rootH > 0 &&
+                (winW != rootW || winH != rootH)) {
+                const double scale =
+                    std::min(static_cast<double>(rootW) / winW, static_cast<double>(rootH) / winH);
+                px = (rootW - winW * scale) / 2 + (rootX - winX) * scale;
+                py = (rootH - winH * scale) / 2 + (rootY - winY) * scale;
+            }
             // The image's top-left, the hotspot taken off (CursorState).
-            const int x = rootX - m_State.hotspotX;
-            const int y = rootY - m_State.hotspotY;
+            const int x = static_cast<int>(std::lround(px)) - m_State.hotspotX;
+            const int y = static_cast<int>(std::lround(py)) - m_State.hotspotY;
             if (x != m_State.x || y != m_State.y) {
                 m_State.x = x;
                 m_State.y = y;
