@@ -28,6 +28,10 @@
 const GIVE_UP_MS = 15;
 /** Bytes of the audio road's chunk header. */
 const HEAD = 12;
+/** The last chunk received is named back at most this often (ms)… */
+const ACK_MS = 5;
+/** …or after this many bytes, for the host's send window (aroadwin=). */
+const ACK_BYTES = 16 * 1024;
 
 /**
  * The bench's other road (U1.4 ter, tracks "vaudio" / "uaudio"): each frame
@@ -42,6 +46,9 @@ const HEAD = 12;
  * in order, since a delta needs the one before; one that waits more than
  * GIVE_UP_MS for an older one goes anyway, marked `lost`. Ultra frames stand
  * alone and go as they complete.
+ * The last chunk received is named back (`ack`, every ACK_MS or ACK_BYTES): a
+ * host with a send window (aroadwin=) keeps at most that much in flight past
+ * it, the ack clock SCTP has and this road lacked (plan « Wi-Fi », W4).
  */
 function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS) {
     const ordered = outMid === 'video';
@@ -51,6 +58,28 @@ function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS) {
     let lastDone = -1;
     let lost = false;
     let gapTimer = 0;
+    // The ack: the last chunk received, not yet named back.
+    let ackS = -1;
+    let ackI = 0;
+    let ackBytes = 0;
+    let ackAt = 0;
+    let ackTimer = 0;
+    const sendAck = () => {
+        clearTimeout(ackTimer);
+        ackTimer = 0;
+        if (ackS < 0) return;
+        self.postMessage({ mid: outMid, ack: { t: tag, s: ackS, i: ackI } });
+        ackS = -1;
+        ackBytes = 0;
+        ackAt = performance.now();
+    };
+    const noteChunk = (seq, idx, bytes) => {
+        ackS = seq;
+        ackI = idx;
+        ackBytes += bytes;
+        if (ackBytes >= ACK_BYTES || performance.now() - ackAt >= ACK_MS) sendAck();
+        else if (!ackTimer) ackTimer = setTimeout(sendAck, ACK_MS);
+    };
     // Whether seq a comes after seq b, on the 16-bit wheel.
     const after = (a, b) => {
         const d = (a - b) & 0xffff;
@@ -119,6 +148,8 @@ function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS) {
             const seq = dv.getUint16(2);
             const idx = dv.getUint16(4);
             const count = dv.getUint16(6);
+            // Every chunk read counts, a late or doubled one too: it left the network.
+            noteChunk(seq, idx, buf.byteLength);
             // Not newer than the last frame given: its time is gone.
             if (lastDone >= 0 && !after(seq, lastDone)) return pump();
             if (ready.has(seq)) return pump();

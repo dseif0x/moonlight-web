@@ -115,7 +115,7 @@ function noteFrame(m) {
  *          log?: function(string): void}} sinks
  * @returns {{mid: string, worker: Worker|null, stop: function(): void}}
  */
-export function attachRtpVideo(event, { onVideo, onUltra, onNack, log = console.log } = {}) {
+export function attachRtpVideo(event, { onVideo, onUltra, onNack, onAck, log = console.log } = {}) {
     const mid = event.transceiver?.mid || (event.track.label === 'ultra' ? 'ultra' : 'video');
     if (!rtpVideoSupported()) {
         // Answered inactive: the host keeps the video on the DataChannel.
@@ -147,6 +147,10 @@ export function attachRtpVideo(event, { onVideo, onUltra, onNack, log = console.
             const st = (globalThis.__mwRtp ||= { hops: [], held: [], ats: [], rcv: [] });
             st.nacked = (st.nacked || 0) + m.nack.i.length;
             if (onNack) onNack(m.nack);
+            return;
+        }
+        if (m.ack) {
+            if (onAck) onAck(m.ack);
             return;
         }
         frames++;

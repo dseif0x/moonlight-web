@@ -868,6 +868,12 @@ export class WebRtcDataChannel {
                         if (dc && dc.readyState === 'open')
                             dc.send(JSON.stringify({ type: 'aroadnack', ...nack }));
                     },
+                    // The last chunk received, for the host's send window (W4).
+                    onAck: (ack) => {
+                        const dc = this.dataChannels.input;
+                        if (dc && dc.readyState === 'open')
+                            dc.send(JSON.stringify({ type: 'aroadack', ...ack }));
+                    },
                 });
                 (this._rtpVideo ||= []).push(rtp);
                 // A video track Chrome stopped feeding (a loss, its PLI ignored
