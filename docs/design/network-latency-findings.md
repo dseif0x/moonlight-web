@@ -1455,6 +1455,44 @@ the production instance, 13:48-13:51, set aside and run again):
   own loopback gaps and Chrome's playout stats (`media-playout`), to tell a
   sound the client never played from one the listener did not catch.
 
+### 06/10/2026 — POC Ultra on a real cable: SCTP, the RTP track and the audio road (session 9b)
+
+Windows native host DualRTX; the UM790Pro as a Windows client, alone on
+DualRTX's switch by cable (1 Gbit/s), no Wi-Fi hop this time (see the 05/10
+entry on the "1 GbE" path). 14:34-15:30, 23 passes. Detail and tables:
+`ultra-lan-poc.md` §6.16, commit `6d8ce138`.
+
+- **The path (NetProbe):** UDP round trip p50 0.38 ms (2.6 ms through the
+  Wi-Fi 7 hop); TCP 948 Mbit/s; paced UDP lossless up to 500 Mbit/s (extra
+  delay p99 ≤ 2.8 ms), 0.4 % loss at 800. DualRTX's Hyper-V vEthernet does not
+  matter. The 150 Mbit/s ceiling seen before came from the Wi-Fi hop.
+- **The DataChannel at high rate** (synthetic source, 120 fps): the SCTP
+  association carries ~530 Mbit/s (1,000 and 2,000 KiB frames); past that, the
+  video sharing the association waits hundreds of ms. One pass at 350 KiB
+  collapsed to 85 Mbit/s although it asked for less than 1,000 KiB carried:
+  a single outlier, to be run again before reading anything into it.
+  `sctpburst=10` at 1,000 KiB: 513 Mbit/s against 528 at the default
+  (`sctpburst=0`, default since 04/10): no gain on cable.
+- **HEVC, median content age** (two rounds each):
+
+  | | SCTP | RTP video track | Audio road |
+  |---|---|---|---|
+  | HEVC alone | 23.1 / 23.2 ms | 32.9 / 31.6 ms | 23.3 / 23.1 ms |
+  | with Ultra's 123 Mbit/s alongside | 22.1-23.3 ms | 31.3 / 31.6 ms | 22.5 ms |
+
+  On cable SCTP no longer suffers when Ultra shares the link (125 ms in Wi-Fi);
+  the audio road matches it; the RTP track keeps its 9-10 ms hold (Chrome's
+  metronome, see U1.4 ter).
+- **5 % loss injected (HEVC):** the audio road loses nothing (58.7 frames
+  drawn/s, 29/30 clicks, +1.3 ms age for its repair); SCTP drops to 31.9
+  frames drawn/s and 20/30 clicks, as in Wi-Fi.
+- **For the Wi-Fi plan:** these are the SCTP passes at today's defaults
+  (`sctpburst=0`); relay log
+  `bench-out/content-age/u14c-um-smoke-hevc-sctp-sctp-r{0,1}-v120-client-r0.relay.csv`.
+  With W4 on the Mac (above): the audio road is the better road on a clean or
+  lossy cable, but in a busy Wi-Fi at Auto it fills the client's receive queue
+  and SCTP wins. The choice of road depends on the link, not on one winner.
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
