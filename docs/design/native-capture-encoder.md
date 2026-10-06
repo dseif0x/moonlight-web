@@ -6586,8 +6586,10 @@ refus ou un build sans elle.
 **Le plancher de QP de VA-API** (décision de Bruno le 05/10 au soir,
 `d287dbb5`) : 18 par défaut, comme NVENC et AMF (`encode::kVaapiMinQp`).
 `vaminqp=` reste pour le banc (-1 : aucun). Au banc, ce plancher ramène le
-H.264 de 17,3 à 0,25 Mbit/s sur la page fixe ; le défaut compilé reste à
-vérifier sous Linux au prochain créneau Ubuntu.
+H.264 de 17,3 à 0,25 Mbit/s sur la page fixe. Le défaut compilé est vérifié
+sous Linux le 06/10 (§8o.20 du banc) : les ready de VA-API disent
+« QP >= 18 », et le H.264 sans réglage tombe de 17,2 à 0,51 Mbit/s sur la page
+fixe en 1440p.
 
 **Concrètement, pour l'utilisateur** : sous Linux avec une carte AMD récente,
 le HEVC et l'AV1 passent par Vulkan Video sans rien régler. Un bureau presque

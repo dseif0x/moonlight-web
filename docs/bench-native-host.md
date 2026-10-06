@@ -4786,6 +4786,42 @@ HEVC sur un bureau calme prend moins de 1 Mbit/s au lieu de 14. En H.264, le
 bureau calme prend encore presque tout le débit réglé, jusqu'à la décision sur
 le plancher de QP.
 
+### 8o.20 Le plancher de QP de VA-API, vérifié sous Linux (06/10/2026)
+
+Design §32.28, `d287dbb5`. UM790Pro (780M, Mesa 26.2.3, noyau 7.0), Ubuntu sous
+Wayland, `main` à `efc02830` cloné dans `~/mw-src` et compilé en DEV
+(`build-dev`, Qt 6.6.3 remis par aqt), `MW_LAN_ONLY=1`. Scripts
+`scratchpad\um\vaapi\q*.sh`, sorties `/tmp/vaqp5`.
+
+**Les tests.**
+- `rate_control`, `linux_route_choice`, `selector`, `capabilities` : 1504/1504.
+- `linux_session` : sortie 0, 0 reset VCN.
+- Les 17 lignes « VA-API ready » disent « QP >= 18 », en H.264 comme en HEVC ;
+  `vaminqp=-1` donne « QP >= 0 ».
+
+**La page de §8o.15** (`still.html?anim=1` en Chrome kiosk), capture KMS de
+l'écran 1 (HDMI-A-2, 2560×1440, où GNOME ouvre le kiosk), 20 Mbit/s tenus
+(`governor=0`), 20 s par passe, H.264 sans réglage
+(Vulkan compute → VA-API), passes alternées ; 0 erreur ffmpeg.
+
+| passe | plancher | Mbit/s après 1 s |
+|---|---|---|
+| 1 | 18 (défaut) | 0,51 |
+| 2 | aucun (`vaminqp=-1`) | 17,20 |
+| 3 | 18 (défaut) | 0,51 |
+| 4 | aucun (`vaminqp=-1`) | 17,19 |
+
+- Le plancher par défaut divise le débit de la page fixe par 34.
+- Le chiffre vaut pour 1440p ; les 0,25 Mbit/s du §8o.19 étaient en 1080p.
+- Une première série sur l'écran 0 (HDMI-A-1) n'a rien mesuré : le kiosk n'y
+  était pas, une seule image capturée en 20 s.
+- Deux courtes sessions d'une autre DEV (13:51:31-13:51:50) ont chevauché la
+  série ; les paires répétées concordent à 0,01 Mbit/s près.
+
+**Concrètement, pour l'utilisateur** : sous Linux avec une carte AMD, un stream
+H.264 sur un bureau calme prend 0,5 Mbit/s au lieu de 17. Le HEVC l'avait déjà
+grâce à Vulkan Video.
+
 ## 8p. Framerate « Hôte » : l'âge du contenu (29-30/09/2026, provisoire)
 
 Plan `framerate-hote`, design §33. Tout passe par des clés de banc :
