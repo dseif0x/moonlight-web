@@ -68,6 +68,18 @@ export function aroadGiveUpMs() {
     }
 }
 
+/**
+ * False when the bench's localStorage says mw_aroad_reask=0: the audio road
+ * asks neither for whole frames nor twice (the witness of plan « Wi-Fi », W4).
+ */
+export function aroadReaskOn() {
+    try {
+        return globalThis.localStorage?.getItem('mw_aroad_reask') !== '0';
+    } catch {
+        return true;
+    }
+}
+
 /** Lets an audio receiver's frames through untouched, on the legacy road. */
 export function passEncodedAudio(receiver) {
     const { readable, writable } = receiver.createEncodedStreams();
@@ -146,6 +158,9 @@ export function attachRtpVideo(event, { onVideo, onUltra, onNack, onAck, log = c
         if (m.nack) {
             const st = (globalThis.__mwRtp ||= { hops: [], held: [], ats: [], rcv: [] });
             st.nacked = (st.nacked || 0) + m.nack.i.length;
+            // Frames asked for whole, and asks repeated (W4's counters).
+            if (m.nack.all) st.whole = (st.whole || 0) + 1;
+            if (m.nack.reask) st.reasked = (st.reasked || 0) + (m.nack.i.length || 1);
             if (onNack) onNack(m.nack);
             return;
         }
@@ -193,6 +208,8 @@ export function attachRtpVideo(event, { onVideo, onUltra, onNack, onAck, log = c
         event.receiver.transform = new globalThis.RTCRtpScriptTransform(worker, {
             mid,
             giveUpMs: aroadGiveUpMs(),
+            // Said only when off: the worker repairs unless told otherwise.
+            ...(aroadReaskOn() ? {} : { reask: false }),
         });
     }
     log('[MW-RTP] taking the frames of RTP track ' + mid + ' by Encoded Transform');

@@ -32,6 +32,16 @@ const HEAD = 12;
 const ACK_MS = 5;
 /** …or after this many bytes, for the host's send window (aroadwin=). */
 const ACK_BYTES = 16 * 1024;
+/** A chunk or frame asked for and still missing is asked again after this
+ * long (ms), at most REASK_TRIES more times: the ask or its answer may be
+ * lost too. */
+const REASK_MS = 8;
+const REASK_TRIES = 2;
+/** The most frames one hole in the seqs is asked for. */
+const HOLE_MAX = 32;
+/** GIVE_UP_MS when asks are repeated: room for them and their answers
+ * (REASK_TRIES + 1 asks REASK_MS apart, then a Wi-Fi round trip). */
+const GIVE_UP_REPAIR_MS = 30;
 
 /**
  * The bench's other road (U1.4 ter, tracks "vaudio" / "uaudio"): each frame
@@ -46,11 +56,16 @@ const ACK_BYTES = 16 * 1024;
  * in order, since a delta needs the one before; one that waits more than
  * GIVE_UP_MS for an older one goes anyway, marked `lost`. Ultra frames stand
  * alone and go as they complete.
+ * A frame none of whose chunks came (a small delta is one or two chunks: one
+ * loss on the air takes it whole) shows only as a hole in the seqs: it is
+ * asked for whole (`all`), the host sending every chunk of it. Asks still
+ * unanswered after REASK_MS go again (`reask`). Off with the page's bench key
+ * mw_aroad_reask=0 (the witness of plan « Wi-Fi », W4).
  * The last chunk received is named back (`ack`, every ACK_MS or ACK_BYTES): a
  * host with a send window (aroadwin=) keeps at most that much in flight past
  * it, the ack clock SCTP has and this road lacked (plan « Wi-Fi », W4).
  */
-function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS) {
+function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS, repair = true) {
     const ordered = outMid === 'video';
     const tag = ordered ? 'v' : 'u';
     const open = new Map(); // seq → frame being put together
@@ -58,6 +73,9 @@ function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS) {
     let lastDone = -1;
     let lost = false;
     let gapTimer = 0;
+    let hiSeq = -1; // the newest seq a chunk came with
+    const holes = new Map(); // seq → {at, tries}: a frame asked for whole
+    let reaskTimer = 0;
     // The ack: the last chunk received, not yet named back.
     let ackS = -1;
     let ackI = 0;
@@ -87,12 +105,70 @@ function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS) {
     };
     const ask = (seq, f, from, to) => {
         const want = [];
+        const now = performance.now();
         for (let k = from; k < to; k++)
             if (!f.parts[k] && !f.asked.has(k)) {
-                f.asked.add(k);
+                f.asked.set(k, { at: now, tries: 0 });
                 want.push(k);
             }
-        if (want.length) self.postMessage({ mid: outMid, nack: { t: tag, s: seq, i: want } });
+        if (want.length) {
+            self.postMessage({ mid: outMid, nack: { t: tag, s: seq, i: want } });
+            armReask();
+        }
+    };
+    // Whether seq s is still worth having: newer than the last frame given.
+    const wanted = (s) => lastDone < 0 || after(s, lastDone);
+    // The asks still unanswered, again; the timer runs while any is left.
+    const reask = () => {
+        reaskTimer = 0;
+        const now = performance.now();
+        let pending = false;
+        for (const [s, h] of holes) {
+            if (!wanted(s) || open.has(s) || ready.has(s) || h.tries >= REASK_TRIES) {
+                holes.delete(s);
+                continue;
+            }
+            pending = true;
+            if (now - h.at < REASK_MS) continue;
+            h.at = now;
+            h.tries++;
+            self.postMessage({ mid: outMid, nack: { t: tag, s, i: [], all: 1, reask: 1 } });
+        }
+        for (const [s, f] of open) {
+            const want = [];
+            for (const [k, a] of f.asked) {
+                if (f.parts[k] || a.tries >= REASK_TRIES) continue;
+                pending = true;
+                if (now - a.at < REASK_MS) continue;
+                a.at = now;
+                a.tries++;
+                want.push(k);
+            }
+            if (want.length)
+                self.postMessage({ mid: outMid, nack: { t: tag, s, i: want, reask: 1 } });
+        }
+        if (pending) reaskTimer = setTimeout(reask, REASK_MS);
+    };
+    function armReask() {
+        if (repair && !reaskTimer) reaskTimer = setTimeout(reask, REASK_MS);
+    }
+    // A hole in the seqs, from the newest seen to @p seq: those frames came
+    // with no chunk at all, asked for whole.
+    const askHoles = (seq) => {
+        if (hiSeq >= 0 && after(seq, hiSeq)) {
+            const gap = (seq - hiSeq - 1) & 0xffff;
+            if (repair && gap > 0 && gap <= HOLE_MAX) {
+                const now = performance.now();
+                for (let k = 1; k <= gap; k++) {
+                    const m = (hiSeq + k) & 0xffff;
+                    if (!wanted(m) || open.has(m) || ready.has(m) || holes.has(m)) continue;
+                    holes.set(m, { at: now, tries: 0 });
+                    self.postMessage({ mid: outMid, nack: { t: tag, s: m, i: [], all: 1 } });
+                }
+                armReask();
+            }
+        }
+        if (hiSeq < 0 || after(seq, hiSeq)) hiSeq = seq;
     };
     const post = (seq, f) => {
         const data = new Uint8Array(f.bytes);
@@ -150,6 +226,8 @@ function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS) {
             const count = dv.getUint16(6);
             // Every chunk read counts, a late or doubled one too: it left the network.
             noteChunk(seq, idx, buf.byteLength);
+            askHoles(seq);
+            holes.delete(seq);
             // Not newer than the last frame given: its time is gone.
             if (lastDone >= 0 && !after(seq, lastDone)) return pump();
             if (ready.has(seq)) return pump();
@@ -160,7 +238,7 @@ function audioRoad(reader, outMid, giveUpMs = GIVE_UP_MS) {
                     got: 0,
                     bytes: 0,
                     hi: -1,
-                    asked: new Set(),
+                    asked: new Map(), // index → {at, tries}
                     key: (dv.getUint8(1) & 1) === 1,
                     fid: dv.getUint32(8),
                 };
@@ -208,8 +286,11 @@ self.onrtctransform = (event) => {
     // "uaudio": the bench's Ultra stream on the same road, posted without
     // the VP8 header of its video track.
     if (mid === 'vaudio' || mid === 'uaudio') {
-        const giveUpMs = (transformer.options && transformer.options.giveUpMs) || GIVE_UP_MS;
-        audioRoad(reader, mid === 'vaudio' ? 'video' : 'ultraraw', giveUpMs).catch((e) =>
+        let giveUpMs = (transformer.options && transformer.options.giveUpMs) || GIVE_UP_MS;
+        const repair = !(transformer.options && transformer.options.reask === false);
+        if (!(transformer.options && transformer.options.giveUpMs) && repair)
+            giveUpMs = GIVE_UP_REPAIR_MS;
+        audioRoad(reader, mid === 'vaudio' ? 'video' : 'ultraraw', giveUpMs, repair).catch((e) =>
             self.postMessage({ mid, error: String(e && e.message ? e.message : e) }),
         );
         return;
