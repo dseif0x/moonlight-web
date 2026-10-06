@@ -40,6 +40,7 @@
 #ifdef Q_OS_WIN
 #include <windows.h>
 #else
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -100,7 +101,37 @@ bool runningAsRoot()
     return ::geteuid() == 0;
 }
 
-#ifndef Q_OS_MACOS
+#ifdef Q_OS_MACOS
+// The .app this process runs from (…/X.app/Contents/MacOS/X → …/X.app), or
+// empty for a bare binary outside any bundle (a build tree, a bench tool).
+QString appBundlePath()
+{
+    QDir dir(QCoreApplication::applicationDirPath());
+    if (!dir.cdUp() || !dir.cdUp()) return {};
+    const QString path = dir.absolutePath();
+    return path.endsWith(QLatin1String(".app")) ? path : QString();
+}
+
+// True when this user can rewrite the whole bundle without asking anyone: the
+// .pkg's postinstall hands it to the console user, the way Chrome and Firefox
+// own theirs. A bundle still root-owned — every install made before that, or
+// another account's — falls back to the password prompt.
+bool bundleOwnedByUs()
+{
+    const QString bundle = appBundlePath();
+    if (bundle.isEmpty()) return false;
+    const uid_t me = ::geteuid();
+    // The spots a stray root-owned leftover would surface first; postinstall
+    // chowns the tree recursively, so these stand for the rest.
+    for (const QString& p :
+         {bundle, bundle + QStringLiteral("/Contents"), bundle + QStringLiteral("/Contents/MacOS"),
+          QCoreApplication::applicationFilePath()}) {
+        struct stat st{};
+        if (::stat(QFile::encodeName(p).constData(), &st) != 0 || st.st_uid != me) return false;
+    }
+    return true;
+}
+#else
 // A container's filesystem is not where this application lives — the image is.
 // Installing a .deb into it would appear to work and then vanish at the next
 // `docker run`, silently reverting the update and leaving the operator to
@@ -119,7 +150,7 @@ bool runningInContainer()
     const QByteArray content = cgroup.readAll();
     return content.contains("docker") || content.contains("lxc") || content.contains("containerd");
 }
-#endif // !Q_OS_MACOS
+#endif // Q_OS_MACOS
 #endif
 
 } // namespace
@@ -136,6 +167,10 @@ SelfUpdater::SelfUpdater(UpdateChecker* checker, QObject* parent)
     if (dir.exists()) {
         for (const QFileInfo& fi : dir.entryInfoList(QDir::Files))
             QFile::remove(fi.absoluteFilePath());
+        // macOS "bundle" path: the unpacked .pkg (~150 MB) the swap could not
+        // remove if it was killed halfway. A no-op everywhere else.
+        QDir(dir.filePath(QStringLiteral("expanded-") + mw::edition::productName()))
+            .removeRecursively();
     }
 #ifdef Q_OS_WIN
     // Same reasoning for the transient task the service path registers: it can
@@ -196,6 +231,7 @@ QString SelfUpdater::elevationMethod()
         return QStringLiteral("direct"); // UAC consent on the host desktop
 #elif defined(Q_OS_MACOS)
         if (runningAsRoot()) return QStringLiteral("root");
+        if (bundleOwnedByUs()) return QStringLiteral("bundle"); // replace in place, no root
         return QStringLiteral("osascript"); // password prompt on the host desktop
 #else
         // Checked before root, precisely because a container usually IS root:
@@ -592,10 +628,12 @@ void SelfUpdater::runInstaller()
         return;
     }
 #else
-    // One detached shell sequence: install, stop this process, relaunch. It has
-    // to outlive us, which is exactly what startDetached's session detachment
-    // buys — a plain child would die with the parent it is about to kill.
-    const QString exe = QCoreApplication::applicationFilePath();
+#if defined(Q_OS_MACOS)
+    if (m_method == QLatin1String("bundle")) {
+        prepareBundle();
+        return;
+    }
+#endif
     const QString pkg = shQuote(m_pkgPath);
     QString install;
 
@@ -629,11 +667,24 @@ void SelfUpdater::runInstaller()
                       : QStringLiteral("pkexec /bin/sh -c %1").arg(shQuote(tool));
     }
 #endif
+    if (!launchDetached(install)) return;
+#endif
+
+    m_state = State::Restarting;
+    armWatchdog();
+}
+
+#ifndef Q_OS_WIN
+bool SelfUpdater::launchDetached(const QString& install)
+{
+    // One detached shell sequence: install, stop this process, relaunch. It has
+    // to outlive us, which is exactly what startDetached's session detachment
+    // buys — a plain child would die with the parent it is about to kill.
     // Relaunching the binary directly (rather than `open -a` on macOS) keeps one
     // code path and goes through the app's own single-instance logic. With the
     // settings file it was started on: without --config the updated server
     // would come back on the default one.
-    QString relaunch = shQuote(exe);
+    QString relaunch = shQuote(QCoreApplication::applicationFilePath());
     if (!AppSettings::fileOverride().isEmpty())
         relaunch += QStringLiteral(" --config ") + shQuote(AppSettings::fileOverride());
 
@@ -649,13 +700,98 @@ void SelfUpdater::runInstaller()
 
     if (!QProcess::startDetached(QStringLiteral("/bin/sh"), {QStringLiteral("-c"), script})) {
         fail(QStringLiteral("Could not launch the installer"));
-        return;
+        return false;
     }
+    return true;
+}
 #endif
 
-    m_state = State::Restarting;
+#ifdef Q_OS_MACOS
+void SelfUpdater::prepareBundle()
+{
+    // The user-owned bundle path: no installer at all. The .pkg is unpacked
+    // without privilege, its app checked, then copied over ours — the way an
+    // AppImage replaces itself. What only a root postinstall does (LaunchAgent,
+    // firewall entry) was done by the first install and carries over as is.
+    const QString bundle = appBundlePath();
+    const QString work = stagingDir() + QStringLiteral("/expanded-") + mw::edition::productName();
+    const QString fresh = work + QStringLiteral("/new.app");
+
+    // The new app must answer the same designated requirement as ours. That is
+    // what TCC keys Screen Recording and Accessibility on, so an app that fails
+    // it would come back unable to capture; it is also the certificate pin that
+    // makes a substituted payload worthless. An ad hoc build (CI without the
+    // signing secrets) has a cdhash requirement no other build can meet, so it
+    // only gets the integrity check — the GitHub digest already vouched for it.
+    QString requirement;
+    {
+        QProcess cs;
+        cs.setProcessChannelMode(QProcess::MergedChannels);
+        cs.start(QStringLiteral("/usr/bin/codesign"),
+                 {QStringLiteral("-d"), QStringLiteral("-r-"), bundle});
+        if (cs.waitForFinished(10000)) {
+            const QString out = QString::fromUtf8(cs.readAll());
+            for (const QString& line : out.split(QLatin1Char('\n'))) {
+                if (line.startsWith(QLatin1String("designated => ")) &&
+                    line.contains(QLatin1String("certificate")))
+                    requirement = line.mid(14).trimmed();
+            }
+        } else {
+            cs.kill();
+        }
+    }
+    const QString test = requirement.isEmpty() ? QString()
+                                               : QStringLiteral(" --test-requirement ") +
+                                                     shQuote(QLatin1Char('=') + requirement);
+
+    // Product archive → component package → Payload → X.app; found by name
+    // rather than by that layout, and moved to a fixed path for the next steps.
+    const QString name = QFileInfo(bundle).fileName();
+    const QString script =
+        QStringLiteral("rm -rf %1 && /usr/sbin/pkgutil --expand-full %2 %1 && "
+                       "src=$(/usr/bin/find %1 -maxdepth 3 -type d -name %3 | /usr/bin/head -n 1) "
+                       "&& [ -n \"$src\" ] && mv \"$src\" %4 && "
+                       "/usr/bin/codesign --verify --deep --strict%5 %4")
+            .arg(shQuote(work), shQuote(m_pkgPath), shQuote(name), shQuote(fresh), test);
+
+    Logger::info(QStringLiteral("[Update] unpacking into the user-owned bundle %1 (%2)")
+                     .arg(bundle, requirement.isEmpty() ? QStringLiteral("integrity check only")
+                                                        : requirement));
+    // Covers the unpacking too: a pkgutil that never returns must not leave the
+    // bar stuck on "installing".
     armWatchdog();
+
+    m_installer = new QProcess(this);
+    m_installer->setProcessChannelMode(QProcess::MergedChannels);
+    m_installer->setStandardOutputFile(installerLogPath());
+    connect(m_installer, &QProcess::finished, this,
+            [this, bundle, work, fresh](int code, QProcess::ExitStatus status) {
+                m_installer->deleteLater();
+                m_installer = nullptr;
+                // The watchdog gave up on a slow unpack: too late to swap now.
+                if (m_state != State::Installing) {
+                    QDir(work).removeRecursively();
+                    return;
+                }
+                if (status != QProcess::NormalExit || code != 0) {
+                    QDir(work).removeRecursively();
+                    fail(QStringLiteral("The update could not be unpacked, or its signature "
+                                        "does not match this app (see logs/installer.log)"));
+                    return;
+                }
+                // --delete: a file the new version dropped would otherwise stay
+                // in the bundle, unsealed, and break its signature. rsync writes
+                // each file aside and renames it in, so the running binary keeps
+                // its old inode until the kill.
+                const QString swap =
+                    QStringLiteral("/usr/bin/rsync -a --delete %1/ %2/ >>%3 2>&1; rm -rf %4")
+                        .arg(shQuote(fresh), shQuote(bundle), shQuote(installerLogPath()),
+                             shQuote(work));
+                if (launchDetached(swap)) m_state = State::Restarting;
+            });
+    m_installer->start(QStringLiteral("/bin/sh"), {QStringLiteral("-c"), script});
 }
+#endif
 
 void SelfUpdater::armWatchdog()
 {

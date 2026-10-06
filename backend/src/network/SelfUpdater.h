@@ -49,8 +49,12 @@ class UpdateChecker;
  *   Linux    AppImage → replace the file in place, no root at all. Running as
  *            root (systemd system unit) → dpkg/rpm directly.
  *            Fallback: pkexec → polkit prompt on the host desktop.
- *   macOS    root → `installer -pkg`. Fallback: osascript "with administrator
- *            privileges" → password prompt on the host desktop.
+ *   macOS    bundle owned by the user (the .pkg's postinstall hands it over)
+ *            → unpack the .pkg, check the app's signature against ours, copy
+ *            it over the bundle: no root at all. Root → `installer -pkg`.
+ *            Fallback (a root-owned bundle, i.e. any install made before the
+ *            hand-over): osascript "with administrator privileges" → password
+ *            prompt on the host desktop.
  *
  * capabilityJson() reports which path applies so the UI can warn ("a
  * confirmation is required on the host PC") instead of hanging on a prompt
@@ -108,6 +112,16 @@ private:
     void runInstaller();
     void onInstallerFinished(int exitCode, bool crashed);
     void armWatchdog();
+#ifndef Q_OS_WIN
+    // Start the detached install → kill us → relaunch sequence. False (and the
+    // update failed) when even that could not start.
+    bool launchDetached(const QString& install);
+#endif
+#ifdef Q_OS_MACOS
+    // The "bundle" path: unpack the .pkg, check the app it carries against our
+    // own designated requirement, then copy it over the user-owned bundle.
+    void prepareBundle();
+#endif
 #ifdef Q_OS_WIN
     // Run the installer from a transient LocalSystem task so it is NOT a child
     // of this process. Empty on success, else the error to report.
@@ -127,7 +141,7 @@ private:
     static QString stagedFileName(const QString& assetName);
 
     // Preferred elevation path for this machine ("scheduled-task", "service",
-    // "appimage", "root", "direct", "pkexec", "osascript"). Empty when the
+    // "appimage", "bundle", "root", "direct", "pkexec", "osascript"). Empty when the
     // platform has no unattended path at all.
     static QString elevationMethod();
     static bool methodNeedsHostConfirmation(const QString& method);
@@ -155,7 +169,7 @@ private:
     QTimer* m_installTick = nullptr;       // pseudo-progress while the installer runs
     int m_installElapsedMs = 0;            // drives the install easing curve
     QTimer* m_watchdog = nullptr;          // gives up when the installer never lands
-    QProcess* m_installer = nullptr;       // Windows: kept to read its exit code
+    QProcess* m_installer = nullptr;       // Windows installer / macOS unpack: exit code
     QTimer* m_recheckGuard = nullptr;      // bounds the wait on a forced check
     QMetaObject::Connection m_recheckWait; // that check's one-shot subscription
     bool m_recheckDone = false;            // one retry per start(), never a loop

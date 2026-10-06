@@ -132,6 +132,17 @@ fi
     || echo "WARN: chown app-data failed"
 echo "chowned app-data to $CONSOLE_USER"
 
+# ── 2a bis) Hand the app bundle to the user too, the way Chrome and Firefox own
+#    theirs in /Applications. The app runs as them, and owning its bundle is
+#    what lets it update itself from the web UI without a password prompt
+#    (SelfUpdater's "bundle" path: it checks the new app's signature against
+#    its own before copying it in). Nothing root ever runs comes from in there:
+#    the firewall entry below only names the binary.
+if [ "$CONSOLE_UID" != "0" ]; then
+    /usr/sbin/chown -R "$CONSOLE_USER" "$APP" || echo "WARN: chown app bundle failed"
+    echo "chowned $APP to $CONSOLE_USER"
+fi
+
 # ── 2b) Allow the app through the macOS application firewall. It is per-app
 #    (not per-port), so this covers every port the server ever binds — 443, a
 #    per-instance parity port (e.g. when another device already forwards 443 on
