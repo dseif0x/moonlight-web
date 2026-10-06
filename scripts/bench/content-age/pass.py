@@ -517,6 +517,15 @@ def main():
             data["rtp"] = json.loads(rtp)
             print("  rtp: %(lost)s frames lost, %(nacked)s chunks NACKed, %(whole)s whole frames "
                   "asked, %(reasked)s asked again" % data["rtp"], flush=True)
+        # POC Ultra U4: the page's PyroWave player, where a frame's decode
+        # time goes (packets parsed, work recorded, GPU done, VideoFrame made).
+        player = d.eval("globalThis.__mwUltraPlayer ? JSON.stringify(__mwUltraPlayer.summary()) : null")
+        if player:
+            data["ultraPlayer"] = json.loads(player)
+            print("  pyrowave p50 ms: " + ", ".join(
+                "%s %s" % (k, (data["ultraPlayer"].get(k) or {}).get("p50"))
+                for k in ("wait", "parse", "record", "done", "frame", "gpuDecode", "gpuPresent")),
+                flush=True)
         if load_seen:
             data["load"] = load_seen
             print("  load: " + " | ".join("%s %s fps, GPU %s ms, level %s%s" % (

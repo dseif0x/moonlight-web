@@ -609,12 +609,12 @@ export class PyroWaveDecoder {
     /**
      * Records the decode of the frame in progress into `encoder`, ending with
      * the 8-bit planes in `packedBuf`. `timestampWrites` (optional) brackets the pass.
-     * `stages` ('dequant', 'idwt', 'pack', or all when absent) is for the lab,
-     * to time one stage alone.
+     * `stages` ('dequant', 'idwt', 'pack', a list of them, or all when absent):
+     * the lab times one stage alone, the player skips the packing.
      */
     decode(encoder, timestampWrites, stages) {
         const d = this.device;
-        const run = (s) => !stages || stages === s;
+        const run = (s) => !stages || (Array.isArray(stages) ? stages.includes(s) : stages === s);
         d.queue.writeBuffer(this.payloadBuf, 0, this.payloadCpu, 0, alignUp(this.payloadWords, 1));
         d.queue.writeBuffer(this.offsetsBuf, 0, this.offsetsCpu);
         const pass = encoder.beginComputePass(timestampWrites ? { timestampWrites } : undefined);
@@ -648,9 +648,9 @@ export class PyroWaveDecoder {
      * Draws the last decoded frame into a WebGPU canvas context (configured
      * by the caller, any 8-bit RGBA format), recorded into `encoder` after
      * decode(). `limited`: the planes are BT.709 limited range (the host's
-     * NV12), else full range.
+     * NV12), else full range. `timestampWrites` (optional) brackets the pass.
      */
-    present(encoder, context, limited = true) {
+    present(encoder, context, limited = true, timestampWrites) {
         const d = this.device;
         const format =
             context.getConfiguration?.()?.format || navigator.gpu.getPreferredCanvasFormat();
@@ -702,6 +702,7 @@ export class PyroWaveDecoder {
                     clearValue: { r: 0, g: 0, b: 0, a: 1 },
                 },
             ],
+            ...(timestampWrites ? { timestampWrites } : {}),
         });
         pass.setPipeline(this._presentPipe);
         pass.setBindGroup(0, this._presentBind);
