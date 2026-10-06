@@ -1430,6 +1430,31 @@ itself (06:08-06:20, the house's Wi-Fi busy again), far above 60.
   it is worth 25-37 ms per sound; under load (the N95) NetEq goes above the
   floor by itself and the floor does nothing; Safari ignores it.
 
+**A3, 13:38-14:31** (Bruno's go after A2; Windows native host DualRTX; the
+N95 now on the bench switch's cable; one Mac pass that overlapped a stream of
+the production instance, 13:48-13:51, set aside and run again):
+- **L2, the Opus frame (`audioframe=`, `ced222aa`), Mac's Chrome in a quiet
+  Wi-Fi.** With the page's floor (60 ms) the buffer hides the frame: 47-79
+  ms whatever it is. Without the floor, NetEq held 31 ms for 5 ms frames, 29
+  for 10 ms, 20 (p90 30) for 20 ms; adding the frame's own wait before it
+  leaves, about 36, 39 and 40 ms. Half or a quarter of the packets (8600 /
+  4300 / 2150 per pass), and no loss or concealment in any. **5 ms stays the
+  best on a quiet link**; the case for longer frames is a loaded Wi-Fi, not
+  measured yet;
+- **L1 on the N95 by cable: NetEq chooses 77-140 ms by itself** (jitter 3-4
+  ms), above the floor, so the floor changes nothing there (buffer 89-101 ms
+  without it, 92-125 with it, concealment 0.07-0.19 % either way). On this
+  small CPU the playout side, not the link, seems to set NetEq's target: the
+  floor's cost depends on the client;
+- **A1 ter by cable**: 43 of 60 beeps played (12-19 in Wi-Fi), NetEq
+  discarded no packet (`packetsDiscarded` 0) and concealed 0.15 %: the
+  missing beeps are not packets NetEq threw away. Chrome reports
+  `totalAudioEnergy` 0 on this receiver even with beeps playing, so that
+  counter cannot place the loss; the flag was not found in the window this
+  time (0 flags), so no sound − picture offset. Next: count the listener's
+  own loopback gaps and Chrome's playout stats (`media-playout`), to tell a
+  sound the client never played from one the listener did not catch.
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
