@@ -164,9 +164,9 @@ public:
     DesktopRect desktopRect() const override;
     const CursorState& cursor() const override;
     /// A GNOME virtual monitor before GNOME 48: its pointer is asked painted
-    /// into every picture, DMA-BUF or shared memory, since Mutter blits it into
-    /// the DMA-BUF ones anyway (MutterScreenCast::embedsPointer). Never on a
-    /// monitor KWin makes, nor from GNOME 48.
+    /// into every picture (MutterScreenCast::embedsPointer), and its frames
+    /// are taken in shared memory only — Mutter's DMA-BUF ones leave trails of
+    /// it. Never on a monitor KWin makes, nor from GNOME 48.
     bool cursorInPicture() const override;
 
 private:

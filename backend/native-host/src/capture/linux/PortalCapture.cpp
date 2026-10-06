@@ -573,8 +573,20 @@ bool PortalCapture::start(std::string& error)
             spa_pod_builder_add(&builder, SPA_FORMAT_VIDEO_maxFramerate,
                                 SPA_POD_Fraction(&pinnedMax), 0);
     };
+    // Except a GNOME virtual monitor before GNOME 48 (embedCursor): into its
+    // DMA-BUF frames Mutter blits the pointer over a recycled buffer, without
+    // repainting what it held, so over a still desktop every place the
+    // pointer went stays painted in — trails, and a stale second pointer
+    // beside the live one (UM790Pro, GNOME 46, Bruno's test). Its shared-
+    // memory frames are painted whole each time, pointer included, and show
+    // neither (probe: 0 trails over 90 moves; a pointer in every picture).
+    // The price is a copy through system memory, on that route only.
+    const bool offerDmabuf = !d->offer.renderNode.empty() && !d->embedCursor;
+    if (!d->offer.renderNode.empty() && !offerDmabuf)
+        log::info("[native] GNOME's virtual monitor before GNOME 48: shared memory only — its "
+                  "DMA-BUF frames keep trails of the pointer");
     auto addFormats = [&](bool pinMax) {
-        if (!d->offer.renderNode.empty()) {
+        if (offerDmabuf) {
             static const uint32_t kFormats[] = {SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_RGBx,
                                                 SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_RGBA};
             for (uint32_t spaFormat : kFormats) {
