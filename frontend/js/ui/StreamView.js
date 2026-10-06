@@ -11901,7 +11901,7 @@ export class StreamView {
                     '[MW-ULTRA] mw_ultra=pyrowave asked, but ' +
                         (this._useWorker
                             ? 'the decode worker is on'
-                            : 'this browser has no WebGPU'),
+                            : 'this browser has neither WebGPU nor WebGL2'),
                 );
         }
         return this._ultraOn;
@@ -11941,7 +11941,10 @@ export class StreamView {
                 (ok) => {
                     this._ultraStarting = false;
                     if (ok) this._ultraPlayer = player;
-                    else console.warn('[MW-ULTRA] no WebGPU adapter: nothing will be drawn');
+                    else
+                        console.warn(
+                            '[MW-ULTRA] no GPU decoder (WebGPU or WebGL2): nothing will be drawn',
+                        );
                 },
                 (e) => {
                     this._ultraStarting = false;

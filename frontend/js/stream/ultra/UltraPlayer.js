@@ -23,12 +23,15 @@
  *
  * Decode and conversion to RGB run on WebGPU (PyroWaveDecoder.js) into an
  * OffscreenCanvas; the VideoFrame is made from that canvas, which stays on the
- * GPU. One frame in flight at a time: a frame that arrives while the GPU is
- * still busy with the previous one replaces any other waiting frame (the
- * freshest wins), never queues behind it.
+ * GPU. A browser with no WebGPU adapter (an Android TV box, older Safari)
+ * runs the WebGL2 decoder instead (PyroWaveDecoderGL.js), the same way. One
+ * frame in flight at a time: a frame that arrives while the GPU is still busy
+ * with the previous one replaces any other waiting frame (the freshest wins),
+ * never queues behind it.
  */
 
 import { PyroWaveDecoder } from './PyroWaveDecoder.js';
+import { PyroWaveDecoderGL, glDecoderSupported } from './PyroWaveDecoderGL.js';
 
 // Per-frame times kept for the breakdown (globalThis.__mwUltraPlayer): the
 // last minute or so at 60 fps, enough for a bench pass.
@@ -43,10 +46,15 @@ function quantiles(xs) {
     return { n: s.length, p50: at(0.5), p90: at(0.9), p99: at(0.99) };
 }
 
-/** True when this browser can run the decoder (WebGPU with a GPU adapter). */
+/**
+ * True when this browser may run the decoder: WebGPU, or WebGL2 for the
+ * fallback. Whether a GPU answers is known only at init().
+ */
 export function ultraPlayerSupported() {
     return (
-        typeof navigator !== 'undefined' && !!navigator.gpu && typeof OffscreenCanvas === 'function'
+        typeof OffscreenCanvas === 'function' &&
+        ((typeof navigator !== 'undefined' && !!navigator.gpu) ||
+            typeof WebGL2RenderingContext === 'function')
     );
 }
 
@@ -101,6 +109,7 @@ export class UltraPlayer {
     /** The breakdown, for the bench (pass.py) and the console. */
     summary() {
         const out = {
+            api: this.api || null,
             stats: { ...this.stats },
             gpuTimestamps: !!this._querySet,
             early: this.early,
@@ -109,11 +118,24 @@ export class UltraPlayer {
         return out;
     }
 
-    /** Opens the GPU and builds the decoder. False when WebGPU is missing. */
+    /**
+     * Opens the GPU and builds the decoder: WebGPU when an adapter answers,
+     * else WebGL2. False when neither can run it.
+     */
     async init() {
         if (!ultraPlayerSupported()) return false;
-        const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-        if (!adapter) return false;
+        // Bench switch (localStorage mw_ultra_api=webgl2): the fallback even where WebGPU runs.
+        let forceGL = false;
+        try {
+            forceGL = globalThis.localStorage?.getItem('mw_ultra_api') === 'webgl2';
+        } catch {
+            forceGL = false;
+        }
+        const adapter =
+            navigator.gpu && !forceGL
+                ? await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' })
+                : null;
+        if (!adapter) return this._initGL();
         const timestamps = adapter.features.has('timestamp-query');
         this.device = await adapter.requestDevice({
             requiredFeatures: timestamps ? ['timestamp-query'] : [],
@@ -138,7 +160,36 @@ export class UltraPlayer {
                 usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
             });
         }
+        this.api = 'webgpu';
         this.log('[MW-ULTRA] PyroWave decoder ready, ' + this.width + 'x' + this.height);
+        return true;
+    }
+
+    _initGL() {
+        if (typeof WebGL2RenderingContext !== 'function') return false;
+        this.canvas = new OffscreenCanvas(this.width, this.height);
+        const gl = this.canvas.getContext('webgl2', {
+            alpha: false,
+            antialias: false,
+            depth: false,
+            stencil: false,
+            powerPreference: 'high-performance',
+        });
+        if (!glDecoderSupported(gl)) return false;
+        try {
+            this.decoder = new PyroWaveDecoderGL(gl, this.width, this.height);
+        } catch (e) {
+            this.log('[MW-ULTRA] WebGL2 decoder failed to build: ' + e.message);
+            return false;
+        }
+        this.gl = gl;
+        this.api = 'webgl2';
+        this.log(
+            '[MW-ULTRA] PyroWave decoder ready on WebGL2 (no WebGPU adapter), ' +
+                this.width +
+                'x' +
+                this.height,
+        );
         return true;
     }
 
@@ -175,6 +226,7 @@ export class UltraPlayer {
         }
         this._busy = true;
         const t0 = performance.now();
+        if (this.gl) return this._runGL(timestamp, backendTs, t0);
         const enc = this.device.createCommandEncoder();
         // Now and then, GPU timestamps around both passes (when the adapter has them).
         const q =
@@ -227,6 +279,62 @@ export class UltraPlayer {
         );
     }
 
+    // WebGL2: the frame goes to the page as soon as the work is issued (the
+    // VideoFrame is a snapshot of the canvas, Chrome orders it after the
+    // draws); a fence, polled, holds the next decode until the GPU is done.
+    _runGL(timestamp, backendTs, t0) {
+        const gl = this.gl;
+        this.decoder.decode();
+        this.decoder.present(this.limited);
+        const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+        gl.flush();
+        const t1 = performance.now();
+        this._note('record', t1 - t0);
+        let frame = null;
+        try {
+            frame = new VideoFrame(this.canvas, { timestamp });
+        } catch (e) {
+            this.stats.errors++;
+            this.log('[MW-ULTRA] VideoFrame from the canvas failed: ' + e.message);
+        }
+        const t2 = performance.now();
+        this._note('frame', t2 - t1);
+        if (frame) this.onFrame(frame, { timestamp, backendTs, decodeMs: t2 - t0 });
+        const poll = () => {
+            if (!this.gl) return;
+            const s = gl.clientWaitSync(sync, 0, 0);
+            if (s === gl.TIMEOUT_EXPIRED) {
+                // A message, not setTimeout(0): nested timeouts are held to
+                // 4 ms, which made the next decode wait (9.2 ms submit to
+                // done against 4.3 on WebGPU, a tenth of the frames replaced).
+                this._yield(poll);
+                return;
+            }
+            gl.deleteSync(sync);
+            this._busy = false;
+            if (s === gl.WAIT_FAILED) this.stats.errors++;
+            else this.stats.frames++;
+            this._note('done', performance.now() - t1);
+            this._next();
+        };
+        poll();
+    }
+
+    // Runs fn at the next task, without the clamp of nested timeouts.
+    _yield(fn) {
+        if (typeof MessageChannel !== 'function') return setTimeout(fn, 0);
+        if (!this._channel) {
+            this._channel = new MessageChannel();
+            this._channel.port1.onmessage = () => {
+                const f = this._yielded;
+                this._yielded = null;
+                f?.();
+            };
+        }
+        this._yielded = fn;
+        this._channel.port2.postMessage(0);
+    }
+
     _readGpuTimes() {
         this._gpuReading = true;
         const buf = this._queryRead;
@@ -256,7 +364,10 @@ export class UltraPlayer {
     destroy() {
         this.decoder?.destroy();
         this.device?.destroy();
+        this.gl?.getExtension('WEBGL_lose_context')?.loseContext();
+        this._channel?.port1.close();
         this.decoder = null;
         this.device = null;
+        this.gl = null;
     }
 }

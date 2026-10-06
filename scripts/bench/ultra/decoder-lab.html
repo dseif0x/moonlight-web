@@ -13,7 +13,7 @@
       // Decodes the oracle's stream (<clip>-<mbps>-<ref>.pwv), compares every frame
       // with the oracle's own decode (max code difference, PSNR) and with the source
       // clip, then times the GPU decode of one frame `timing` times. The result is
-      // left in window.__labResult.
+      // left in window.__labResult. &api=webgl2 runs the WebGL2 fallback instead.
       import { PyroWaveDecoder } from "/frontend/js/stream/ultra/PyroWaveDecoder.js";
 
       const q = new URLSearchParams(location.search);
@@ -294,9 +294,210 @@
         return res;
       }
 
-      window.__labResult = run().catch((e) => ({
-        error: String((e && e.stack) || e),
-      }));
+      // The WebGL2 fallback (?api=webgl2): the same checks against the oracle,
+      // the present path read back from its canvas, and the decode timed by
+      // wall clock (a 1-pixel read-back waits for it) and, when the browser
+      // has it, by EXT_disjoint_timer_query_webgl2.
+      async function runGL() {
+        const { PyroWaveDecoderGL, glDecoderSupported } =
+          await import("/frontend/js/stream/ultra/PyroWaveDecoderGL.js");
+        const pwv = await bytes(`/corpus/${clip}-${mbps}-${ref}.pwv`);
+        const dv = new DataView(pwv.buffer);
+        const w = dv.getUint32(4, true);
+        const h = dv.getUint32(8, true);
+        const nFrames = Math.min(dv.getUint32(20, true), maxFrames);
+        const oracle = y4mFrames(
+          await bytes(`/corpus/${clip}-${mbps}-${ref}-dec.y4m`),
+          w,
+          h,
+        );
+        const source = y4mFrames(await bytes(`/corpus/${clip}.y4m`), w, h);
+        const frames = [];
+        let pos = 24;
+        for (let f = 0; f < nFrames; f++) {
+          const n = dv.getUint32(pos, true);
+          pos += 4;
+          const packets = [];
+          for (let k = 0; k < n; k++) {
+            const size = dv.getUint32(pos, true);
+            packets.push(pwv.subarray(pos + 4, pos + 4 + size));
+            pos += 4 + size;
+          }
+          frames.push(packets);
+        }
+
+        const canvas = new OffscreenCanvas(w, h);
+        const gl = canvas.getContext("webgl2", {
+          antialias: false,
+          depth: false,
+          alpha: false,
+          preserveDrawingBuffer: true,
+        });
+        if (!glDecoderSupported(gl))
+          throw new Error("no WebGL2 with float targets");
+        const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+        const adapter =
+          "webgl2 " +
+          (dbg
+            ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)
+            : gl.getParameter(gl.RENDERER));
+        log(`adapter: ${adapter}`);
+        const dec = new PyroWaveDecoderGL(gl, w, h);
+        const errors = [];
+        const glErr = (where) => {
+          const e = gl.getError();
+          if (e) errors.push(`${where}: GL error 0x${e.toString(16)}`);
+        };
+
+        const perFrame = [];
+        for (let f = 0; f < frames.length; f++) {
+          for (const p of frames[f]) {
+            if (!dec.pushPacket(p))
+              throw new Error(`frame ${f}: malformed packet`);
+          }
+          const ready = dec.isReady();
+          dec.decode();
+          const got = dec.readPlanes();
+          glErr(`frame ${f}`);
+          const vsOracle = compare(got, oracle[f], w * h);
+          const vsSource = compare(got, source[f], w * h);
+          perFrame.push({
+            frame: f,
+            ready,
+            maxDiff: vsOracle.maxDiff,
+            maxDiffC: vsOracle.maxDiffC,
+            maxDiffCAt: vsOracle.maxDiffCAt,
+            badC: vsOracle.badC,
+            psnrVsOracle: vsOracle.psnr,
+            psnrVsSource: vsSource.psnr,
+          });
+        }
+
+        let presentMaxDiff = null;
+        if (q.get("present") === "1") {
+          dec.present(true);
+          const px = new Uint8Array(w * h * 4);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+          glErr("present");
+          const ref = oracle[frames.length - 1];
+          const cw = w / 2;
+          const cOff = w * h;
+          const crOff = cOff + cw * (h / 2);
+          const clamp = (v) => Math.min(255, Math.max(0, v));
+          let maxDiff = 0;
+          for (let y = 0; y < h; y += 7) {
+            for (let x = 0; x < w; x += 7) {
+              const yy = (ref[y * w + x] - 16) / 219;
+              const ci = (y >> 1) * cw + (x >> 1);
+              const cb = (ref[cOff + ci] - 128) / 224;
+              const cr = (ref[crOff + ci] - 128) / 224;
+              const rgb = [
+                yy + 1.5748 * cr,
+                yy - 0.1873 * cb - 0.4681 * cr,
+                yy + 1.8556 * cb,
+              ].map((v) => clamp(Math.round(v * 255)));
+              // GL rows run bottom up.
+              const at = ((h - 1 - y) * w + x) * 4;
+              for (let k = 0; k < 3; k++)
+                maxDiff = Math.max(maxDiff, Math.abs(px[at + k] - rgb[k]));
+            }
+          }
+          presentMaxDiff = maxDiff;
+          log(`present: max RGB diff ${maxDiff} (sampled 1 px in 49)`);
+        }
+
+        // The last frame decoded again and again, then presented.
+        const px1 = new Uint8Array(4);
+        const sync = () =>
+          gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px1);
+        const wallMs = [];
+        for (let i = 0; i < timing; i++) {
+          const t0 = performance.now();
+          dec.decodedThisSeq = false;
+          dec.decode();
+          dec.present(true);
+          sync();
+          wallMs.push(performance.now() - t0);
+        }
+        glErr("wall");
+        const tq = gl.getExtension("EXT_disjoint_timer_query_webgl2");
+        const gpuMs = [];
+        let badTimestamps = 0;
+        if (tq) {
+          for (let i = 0; i < Math.min(timing, 50); i++) {
+            const qy = gl.createQuery();
+            dec.decodedThisSeq = false;
+            gl.beginQuery(tq.TIME_ELAPSED_EXT, qy);
+            dec.decode();
+            gl.endQuery(tq.TIME_ELAPSED_EXT);
+            sync();
+            for (
+              let k = 0;
+              k < 100 && !gl.getQueryParameter(qy, gl.QUERY_RESULT_AVAILABLE);
+              k++
+            )
+              await new Promise((r) => setTimeout(r, 2));
+            if (
+              gl.getQueryParameter(qy, gl.QUERY_RESULT_AVAILABLE) &&
+              !gl.getParameter(tq.GPU_DISJOINT_EXT)
+            )
+              gpuMs.push(gl.getQueryParameter(qy, gl.QUERY_RESULT) / 1e6);
+            else badTimestamps++;
+            gl.deleteQuery(qy);
+            // Reading the timer raises INVALID_OPERATION in Chrome (ANGLE on
+            // D3D11 and SwiftShader alike, cause not found) while its values
+            // come right: dropped here, not counted as a decode error.
+            gl.getError();
+          }
+        }
+        glErr("timing");
+
+        const res = {
+          clip,
+          mbps,
+          ref,
+          stages: "all",
+          warm,
+          width: w,
+          height: h,
+          frames: perFrame.length,
+          adapter,
+          maxDiff: Math.max(...perFrame.map((x) => x.maxDiff)),
+          maxDiffC: Math.max(...perFrame.map((x) => x.maxDiffC)),
+          minPsnrVsOracle: Math.min(...perFrame.map((x) => x.psnrVsOracle)),
+          meanPsnrVsSource:
+            perFrame.reduce((a, x) => a + x.psnrVsSource, 0) / perFrame.length,
+          allReady: perFrame.every((x) => x.ready),
+          gpuMs: gpuMs.length
+            ? {
+                p50: pct(gpuMs, 0.5),
+                p99: pct(gpuMs, 0.99),
+                min: Math.min(...gpuMs),
+                dropped: badTimestamps,
+              }
+            : null,
+          wallMs: wallMs.length
+            ? {
+                p50: pct(wallMs, 0.5),
+                p99: pct(wallMs, 0.99),
+                min: Math.min(...wallMs),
+              }
+            : null,
+          errors,
+          presentMaxDiff,
+          perFrame,
+        };
+        dec.destroy();
+        log(JSON.stringify({ ...res, perFrame: undefined }));
+        return res;
+      }
+
+      window.__labResult = (q.get("api") === "webgl2" ? runGL() : run()).catch(
+        (e) => ({
+          error: String((e && e.stack) || e),
+        }),
+      );
       window.__labResult.then((r) => {
         window.__labDone = r;
       });

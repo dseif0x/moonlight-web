@@ -104,4 +104,51 @@ describe('UltraPlayer', () => {
         await Promise.resolve();
         expect(frames).toEqual([2]);
     });
+
+    it('on WebGL2, hands each frame over at once and holds the next until the fence', async () => {
+        vi.useFakeTimers();
+        // The fence is polled at the next task: a message, or here a timeout.
+        vi.stubGlobal('MessageChannel', undefined);
+        try {
+            vi.stubGlobal(
+                'VideoFrame',
+                class {
+                    constructor(src, { timestamp }) {
+                        this.timestamp = timestamp;
+                    }
+                },
+            );
+            const { PyroWaveDecoder } = await import('../js/stream/ultra/PyroWaveDecoder.js');
+            const frames = [];
+            const p = new UltraPlayer(64, 64, (frame, meta) => frames.push(meta.timestamp), {
+                log: () => {},
+            });
+            let signaled = false;
+            p.gl = {
+                TIMEOUT_EXPIRED: 1,
+                WAIT_FAILED: 2,
+                SYNC_GPU_COMMANDS_COMPLETE: 3,
+                fenceSync: () => ({}),
+                flush() {},
+                clientWaitSync: () => (signaled ? 0 : 1),
+                deleteSync() {},
+            };
+            p.decoder = new PyroWaveDecoder();
+            p.canvas = {};
+            p.push(new Uint8Array([1]), 1, 10);
+            expect(frames).toEqual([1]); // at once, not at the fence
+            p.push(new Uint8Array([2]), 2, 11); // waits
+            p.push(new Uint8Array([3]), 3, 12); // replaces frame 2
+            vi.advanceTimersByTime(5);
+            expect(p.decoder.pushed).toEqual([1]);
+            signaled = true;
+            vi.advanceTimersByTime(1);
+            expect(p.decoder.pushed).toEqual([1, 3]);
+            expect(frames).toEqual([1, 3]);
+            expect(p.stats.replaced).toBe(1);
+            expect(p.stats.frames).toBe(2);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
 });

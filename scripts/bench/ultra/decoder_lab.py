@@ -63,6 +63,7 @@ def main():
     ap.add_argument("--show", action="store_true", help="print each frame's line")
     ap.add_argument("--present", action="store_true", help="check the product's presentation path once")
     ap.add_argument("--power", default="high-performance", help="the adapter asked for: high-performance or low-power")
+    ap.add_argument("--api", default="webgpu", help="webgpu, or webgl2 for the fallback decoder")
     # Another machine's Chrome, reached through SSH tunnels: its DevTools port
     # forwarded here (-L), and this server forwarded there (-R) on the same
     # port, so both ends stay on the loopback.
@@ -105,9 +106,9 @@ def main():
         for clip in a.clips.split(","):
             for mbps in a.mbps.split(","):
                 url = ("http://127.0.0.1:%d/scripts/bench/ultra/decoder-lab.html?clip=%s&mbps=%s&ref=%s"
-                       "&frames=%d&timing=%d&stages=%s&warm=%d&power=%s&present=%d" % (http_port, clip, mbps, a.ref, a.frames, a.timing,
+                       "&frames=%d&timing=%d&stages=%s&warm=%d&power=%s&present=%d&api=%s" % (http_port, clip, mbps, a.ref, a.frames, a.timing,
                                                                     a.stages, a.warm, a.power,
-                                                                    1 if a.present else 0))
+                                                                    1 if a.present else 0, a.api))
                 call("Page.navigate", url=url)
                 time.sleep(1)
                 r = call("Runtime.evaluate", expression="window.__labResult", awaitPromise=True,
@@ -127,6 +128,9 @@ def main():
                          res["meanPsnrVsSource"], res["allReady"],
                          "%.3f" % g["p50"] if g else "-", "%.3f" % g["p99"] if g else "-",
                          " ERRORS %s" % res["errors"] if res["errors"] else ""))
+                if res.get("wallMs"):
+                    print("    wall clock, decode + present + 1-pixel read-back: p50 %.2f ms p99 %.2f ms"
+                          % (res["wallMs"]["p50"], res["wallMs"]["p99"]))
                 if res.get("presentMaxDiff") is not None:
                     print("    present path: max RGB diff %d against the oracle's frame" % res["presentMaxDiff"])
     finally:

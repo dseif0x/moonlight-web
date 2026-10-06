@@ -22,14 +22,11 @@
 // Output: the decoded planes in f32 (Y at the aligned size, Cb and Cr at half
 // of it, before the DC shift), then `pack` turns them into 8-bit 4:2:0 bytes
 // cropped to the picture, which is what the reference decoder writes.
+//
+// The packet parser and the frame layout are in PyroWaveFrame.js, shared with
+// the WebGL2 fallback.
 
-const LEVELS = 5;
-const NONE = 0xffffffff;
-const ALIGN = 1 << LEVELS;
-const MIN_SIZE = 4 << LEVELS;
-const SEQ_MASK = 7;
-
-const alignUp = (v, a) => (v + a - 1) & ~(a - 1);
+import { LEVELS, NONE, PyroWaveFrame, alignUp } from './PyroWaveFrame.js';
 
 const DEQUANT_WGSL = /* wgsl */ `
 struct BlockMeta { plane: u32, width: u32, height: u32, xy: u32 }
@@ -354,72 +351,22 @@ fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
 }
 `;
 
-export class PyroWaveDecoder {
+export class PyroWaveDecoder extends PyroWaveFrame {
     /**
      * @param {GPUDevice} device
      * @param {number} width picture width (even)
      * @param {number} height picture height (even)
      */
     constructor(device, width, height) {
+        super(width, height);
         this.device = device;
-        this.width = width;
-        this.height = height;
-        this.alignedW = Math.max(alignUp(width, ALIGN), MIN_SIZE);
-        this.alignedH = Math.max(alignUp(height, ALIGN), MIN_SIZE);
-        this._layout();
         this._resources();
-        this.clear();
-    }
-
-    // Planes, block metadata and the block index order of bitstream.md.
-    _layout() {
-        const W = this.alignedW;
-        const H = this.alignedH;
-        this.planeOf = {}; // "level,comp,band" -> float offset
-        let floats = 0;
-        for (let level = 0; level < LEVELS; level++) {
-            for (let comp = 0; comp < 3; comp++) {
-                if (level === 0 && comp !== 0) continue;
-                for (let band = 0; band < 4; band++) {
-                    this.planeOf[`${level},${comp},${band}`] = floats;
-                    floats += (W >> (level + 1)) * (H >> (level + 1));
-                }
-            }
-        }
-        this.outY = floats;
-        floats += W * H;
-        this.outCb = floats;
-        floats += (W / 2) * (H / 2);
-        this.outCr = floats;
-        floats += (W / 2) * (H / 2);
-        this.coefFloats = floats;
-
-        const metas = [];
-        for (let level = LEVELS - 1; level >= 0; level--) {
-            for (let comp = 0; comp < 3; comp++) {
-                if (level === 0 && comp !== 0) continue;
-                for (let band = level === LEVELS - 1 ? 0 : 1; band < 4; band++) {
-                    const w = W >> (level + 1);
-                    const h = H >> (level + 1);
-                    const plane = this.planeOf[`${level},${comp},${band}`];
-                    for (let by = 0; by < Math.ceil(h / 32); by++) {
-                        for (let bx = 0; bx < Math.ceil(w / 32); bx++) {
-                            metas.push(plane, w, h, bx | (by << 16));
-                        }
-                    }
-                }
-            }
-        }
-        this.blockCount = metas.length / 4;
-        this.metas = new Uint32Array(metas);
     }
 
     _resources() {
         const d = this.device;
         const S = GPUBufferUsage.STORAGE;
         const C = GPUBufferUsage.COPY_DST;
-        this.offsetsCpu = new Uint32Array(this.blockCount);
-        this.payloadCpu = new Uint32Array(1 << 20);
         this.payloadBuf = d.createBuffer({ size: this.payloadCpu.byteLength + 16, usage: S | C });
         this.offsetsBuf = d.createBuffer({ size: this.offsetsCpu.byteLength, usage: S | C });
         this.metaBuf = d.createBuffer({ size: this.metas.byteLength, usage: S | C });
@@ -519,91 +466,13 @@ export class PyroWaveDecoder {
         });
     }
 
-    clear() {
-        this.offsetsCpu.fill(NONE);
-        this.payloadWords = 0;
-        this.decodedBlocks = 0;
-        this.totalBlocks = this.blockCount;
-        this.lastSeq = -1;
-        this.decodedThisSeq = false;
-    }
-
-    /** Feeds one network packet (one or more 32x32 blocks). False on a malformed packet. */
-    pushPacket(bytes) {
-        const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-        let pos = 0;
-        while (bytes.byteLength - pos >= 8) {
-            const w0 = dv.getUint32(pos, true);
-            const w1 = dv.getUint32(pos + 4, true);
-            const seq = (w0 >>> 28) & 7;
-            if (w0 >>> 31) {
-                // Start of frame: dimensions and the number of coded blocks.
-                if (!this._sequence(seq)) return true;
-                if (((w1 >>> 24) & 3) !== 0) return false;
-                if ((w0 & 0x3fff) + 1 !== this.width || ((w0 >>> 14) & 0x3fff) + 1 !== this.height)
-                    return false;
-                if (((w1 >>> 26) & 1) !== 0) return false; // 4:4:4 not handled here
-                this.totalBlocks = w1 & 0xffffff;
-                pos += 8;
-                continue;
-            }
-            const words = (w0 >>> 16) & 0xfff;
-            if (words < 2 || words * 4 > bytes.byteLength - pos) return false;
-            if (!this._sequence(seq)) return true;
-            const block = w1 >>> 8;
-            if (block >= this.blockCount) return false;
-            if (this.offsetsCpu[block] === NONE) {
-                this._ensurePayload(this.payloadWords + words);
-                this.offsetsCpu[block] = this.payloadWords;
-                // The block's words, copied as they are (little-endian on every WebGPU platform).
-                const src = new Uint8Array(bytes.buffer, bytes.byteOffset + pos, words * 4);
-                new Uint8Array(this.payloadCpu.buffer, this.payloadWords * 4, words * 4).set(src);
-                this.payloadWords += words;
-                this.decodedBlocks++;
-            }
-            pos += words * 4;
-        }
-        return pos === bytes.byteLength;
-    }
-
-    // False when the packet belongs to an older frame than the one in progress.
-    _sequence(seq) {
-        if (this.lastSeq < 0) {
-            this.clear();
-            this.lastSeq = seq;
-            return true;
-        }
-        const diff = (seq - this.lastSeq) & SEQ_MASK;
-        if (diff > SEQ_MASK / 2) return false;
-        if (diff !== 0) {
-            this.clear();
-            this.lastSeq = seq;
-        }
-        return true;
-    }
-
-    _ensurePayload(words) {
-        if (words <= this.payloadCpu.length) return;
-        let n = this.payloadCpu.length;
-        while (n < words) n *= 2;
-        const grown = new Uint32Array(n);
-        grown.set(this.payloadCpu.subarray(0, this.payloadWords));
-        this.payloadCpu = grown;
+    _payloadGrown(words) {
         this.payloadBuf.destroy();
         this.payloadBuf = this.device.createBuffer({
-            size: n * 4 + 16,
+            size: words * 4 + 16,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
         this._bindDequant();
-    }
-
-    /** Every block of the frame in progress arrived (or, partial, more than half). */
-    isReady(allowPartial = false) {
-        if (this.decodedThisSeq || this.lastSeq < 0) return false;
-        if (this.decodedBlocks < this.totalBlocks) {
-            return allowPartial && this.decodedBlocks > this.totalBlocks / 2;
-        }
-        return true;
     }
 
     /**
