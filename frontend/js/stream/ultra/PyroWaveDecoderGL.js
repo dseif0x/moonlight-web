@@ -208,7 +208,13 @@ void main() {
     uint sh = signOffset & 31u;
     uint signs = word(w) >> sh;
     if (sh != 0u) signs |= word(w + 1u) << (32u - sh);
-    float v[8] = float[8](a.x, a.y, a.z, a.w, c.x, c.y, c.z, c.w);
+    // Filled element by element: Mali's compiler finds no precision for an
+    // array constructor, whatever the default.
+    float v[8];
+    for (int k = 0; k < 4; k++) {
+        v[k] = a[k];
+        v[k + 4] = c[k];
+    }
     uint m = 0u;
     for (int k = 0; k < 8; k++) {
         if (v[k] != 0.0) {

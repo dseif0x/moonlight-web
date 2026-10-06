@@ -88,7 +88,9 @@ def main():
         for _ in range(50):
             try:
                 targets = json.load(urllib.request.urlopen("http://127.0.0.1:%d/json" % cdp_port))
-                page = next(t for t in targets if t["type"] == "page")
+                pages = [t for t in targets if t["type"] == "page"]
+                # A WebView can list a never attached, empty page first.
+                page = next((t for t in pages if '"attached":true' in t.get("description", "")), pages[0])
                 break
             except Exception:
                 time.sleep(0.2)
@@ -110,7 +112,14 @@ def main():
                                                                     a.stages, a.warm, a.power,
                                                                     1 if a.present else 0, a.api))
                 call("Page.navigate", url=url)
-                time.sleep(1)
+                # A slow client (a TV) takes seconds to load the module that sets it.
+                for _ in range(120):
+                    time.sleep(0.5)
+                    ready = call("Runtime.evaluate", returnByValue=True,
+                                 expression="location.href === %s && window.__labResult !== undefined"
+                                 % json.dumps(url))
+                    if ready.get("result", {}).get("value"):
+                        break
                 r = call("Runtime.evaluate", expression="window.__labResult", awaitPromise=True,
                          returnByValue=True)
                 res = r.get("result", {}).get("value") or {"error": json.dumps(r)[:2000]}
