@@ -1058,6 +1058,20 @@ les bancs sur DualRTX ne sont pas touchés. Il faut que la route audio porte une
 marque vidéo (AF4x) et que seul le vrai son garde EF. Le plan DSCP choisira les
 marques.
 
+Nuance mesurée le 06/10 sur la Freebox du banc (D0, constats réseau
+`559ed14e`, §3). La Freebox ne suit pas la RFC 8325 :
+- quand le câble de l'hôte et le Wi-Fi du client sont sur le même appareil,
+  tout part en BE, quel que soit le DSCP ;
+- derrière un répéteur lointain (celui du N95, par exemple), elle applique
+  l'ancienne règle, file = DSCP >> 3. La route audio en EF part donc en VI,
+  comme la piste vidéo RTP en AF42, et non en VO. Mais le SCTP en AF11 part
+  en BK, la file de fond.
+
+Sur un hôte Linux ou macOS, une comparaison des routes vers un client
+lointain mêle donc la différence de file à celle du transport : SCTP en BK
+contre la route audio en VI. La correction reste due pour un point d'accès
+qui suit la RFC 8325.
+
 ### 6.12 U2.4 : le PyroWave de référence, l'oracle des portages (05/10/2026, soir)
 
 Priorité donnée par Bruno, le 05/10 au soir : « compléter l'implémentation de
