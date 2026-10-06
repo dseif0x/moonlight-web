@@ -1551,6 +1551,7 @@ Link keys go in `MW_NATIVE_TUNING` / `--tuning` of `local_matrix.py`
 | `sctpss=0..5` | usrsctp's stream scheduler (4 = fair bandwidth) | `0c21bd5a` |
 | `namedrops=0\|1` | name the relay's dropped delta to the encoder | `25bf8c48` |
 | `audiolog=1` | each audio packet's way through the host (pacer tick and queue, peak, relay thread, RTP track), `relay-audio-*.csv` | `1489e114` |
+| `audioframe=5\|10\|20` | the native host's Opus frame in ms (5 the product): half or a quarter of the packets, 5 or 15 ms more before each | `ced222aa` |
 | `aroadpace=<x>`, `aroadwin=<KiB>` | the audio road's pacing and send window (both off by default) | `aea2a192`, `89adcb0f` |
 | `aroadbudget=<%>` | the audio road's resend budget, share of what it sent over 100 ms (default 20) | `210318fd` |
 
