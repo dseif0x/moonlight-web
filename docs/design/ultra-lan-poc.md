@@ -1392,6 +1392,97 @@ Reste à expliquer les ~9 ms : le temps d'encodage sur la RTX, le décodage
 WebGPU sur la 780M, la taille des images, ou le chemin de présentation de
 `UltraPlayer`.
 
+### 6.18 D'où viennent les ~9 ms de PyroWave (06/10/2026, 19:20-19:35)
+
+**Le découpage par image** se lit dans les relevés du §6.17, sans nouvelle
+passe (`scratchpad/pw_split.py`). Les postes sont :
+- l'encodage : de la capture à la remise au relais, sur l'horloge de l'hôte ;
+- le trajet : de cette remise à l'arrivée de l'image entière dans la page. Il
+  comprend l'envoi, le câble et Chrome ;
+- le décodage : de l'arrivée à l'image décodée ;
+- le dessin.
+
+| Médianes (p90) | HEVC | PyroWave | Écart |
+|---|---|---|---|
+| Encodage (RTX) | 3,8 ms (4,5) | 2,5 ms (3,5) | −1,3 ms |
+| Trajet | 1,7 ms (3,7) | 5,3-7,0 ms (10) | +3,5 à +5 ms |
+| Décodage (780M) | 0,7 ms (1,1) | 6,9 ms (8,5) | **+6,2 ms** |
+| File et dessin | 0,3 ms | 0,2 ms | 0 |
+
+- **L'encodeur n'est pas en cause** : il est plus rapide que NVENC.
+- **Le trajet tient à la taille.** Une image de 354 Ko demande 2,8 ms de
+  sérialisation sur 1 GbE, quel que soit le transport. L'image HEVC est 5 à
+  10 fois plus petite. Comme l'image part entière puis se décode entière, ce
+  temps s'ajoute aux autres au lieu de se recouvrir avec eux.
+- **Le décodage est le premier poste.**
+
+**Le décodage, poste par poste.** `UltraPlayer` note maintenant chaque étape.
+Le GPU est mesuré par timestamp-query, une image sur huit. Le relevé est dans
+`globalThis.__mwUltraPlayer.summary()`, que `pass.py` range sous
+`ultraPlayer`. Deux passes (`u14q-*`), médianes :
+
+| | Route audio | SCTP |
+|---|---|---|
+| Lecture des paquets | 0,1 ms | 0,1 ms |
+| Préparation et envoi du travail | 0,2 ms | 0,2 ms |
+| Envoi → `onSubmittedWorkDone` | 6,1 ms | 6,4 ms |
+| dont GPU, décodage (déquantification + iDWT) | 3,15 ms | 3,15 ms |
+| dont GPU, affichage en RGB | 0,59 ms | 0,59 ms |
+| VideoFrame depuis le canevas | 0,1 ms | 0,1 ms |
+| Décodage complet, vu du journal | 6,5 ms | 6,7 ms |
+
+- **La passe « pack » est retirée.** La conversion en 8 bits ne sert qu'au labo
+  (§6.13), puisque l'affichage lit les plans f32. Le décodage gagne environ
+  0,4 ms (6,9 → 6,5-6,7 ms).
+- **Le GPU travaille 3,7 ms sur les 6,1 à 6,4 ms d'attente.** À 1440p, 3,15 ms
+  de décodage correspondent bien aux 1,8 ms du labo à 1080p (§6.13).
+- **Rendre l'image dès l'envoi ne gagne rien à l'écran.** Interrupteur de banc
+  `mw_ultra_early=1` : la VideoFrame part à la page dès la soumission, sans
+  attendre `onSubmittedWorkDone`.
+  - L'hôte → dessin tombe à 8,1 ms (route audio) et 9,4 ms (SCTP).
+  - Le clic, lui, ne bouge pas : 45,4 contre 41,6 ms, et 48,0 contre 48,2 ms.
+  - Le gain n'était qu'une heure notée plus tôt : le dessin attend de toute
+    façon la fin du GPU. Les ~2,4 ms hors timestamps ne sont donc pas seulement
+    un rappel tardif. L'interrupteur reste éteint par défaut.
+  - Piège du banc : `mw_ultra_early` reste lui aussi dans le profil du Chrome
+    de banc. Les passes suivantes posent `mw_ultra_early=0`.
+- **Le clic départage moins que l'hôte → dessin.** Sur ces quatre passes, il
+  vaut 41,6 à 48,2 ms, et la route audio égale déjà le HEVC (41-43 ms). À
+  30 clics par passe, un écart de ±4 ms reste du bruit.
+
+**Ce que disent les sources** (recherche du 06/10 : le blog de l'auteur, les
+dépôts `pyrowave` et `pyrofling`, la PR #355 de Nova, Hacker News, la doc
+NVENC et GeForce NOW). Notre résultat est cohérent, pas anormal.
+- **Les chiffres de l'auteur sont ceux d'un gros GPU en natif** : sur une
+  RX 9070 XT, 0,13 ms d'encodage à 1080p et moins de 0,1 ms de décodage. Il
+  ne publie aucune mesure de bout en bout. Son client `pyrofling` est un client
+  natif Vulkan, qui prend la dernière image prête à chaque cycle, sans
+  décodage par tranches.
+- **Le gain promis se fait surtout côté client**, contre un décodeur matériel
+  qui retient des images. Sur une Retroid Pocket 6 en 1080p60, Nova mesure 1,9
+  à 2,7 ms en PyroWave contre 11 ms en HEVC. S'y ajoutent l'absence de file et
+  de lookahead dans l'encodeur, un temps fixe, et des pertes qui ne coûtent
+  qu'un bloc flou.
+- **Notre HEVC est déjà dans le cas favorable** : 3,8 ms de NVENC et 0,7 ms de
+  WebCodecs sans retenue. Il n'y a presque plus rien à gagner, alors que
+  PyroWave paie 2,8 ms de sérialisation et un décodage WebGPU sur un iGPU.
+- **GeForce NOW joue surtout sur la cadence** : 240 et 360 i/s, Reflex côté
+  serveur, Adaptive Sync. NVENC sait aussi rendre la main par tranche
+  (`enableSubFrameWrite`).
+
+**Pistes, par gain attendu :**
+1. **Envoyer et décoder par tranches.** Le format s'y prête (blocs 32×32
+   indépendants). La sérialisation se recouvrirait alors avec l'encodage et le
+   décodage : 2 à 4 ms attendues.
+2. **Accélérer l'iDWT en WGSL** : lecture de 4 texels à la fois, FP16
+   (§6.13). Sur un petit GPU, c'est 4 fois l'amont : de l'ordre de 1,5 ms à
+   gagner.
+3. **Passer à 120 i/s à débit égal**, avec des images deux fois plus petites.
+   Ou baisser le débit à ~100 Mbit/s.
+4. Même tout cela fait, PyroWave rejoindrait le HEVC sur ce client (7 à 9 ms)
+   sans le battre nettement. Son terrain reste les clients dont le décodeur
+   retient des images (TV, mobiles, certains Mac) et les liens avec pertes.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
