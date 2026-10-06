@@ -507,6 +507,13 @@ def main():
                 data["ultra"]["totals"].get("frames"), data["ultra"]["totals"].get("lost"),
                 last.get("mbps"), (last.get("spreadMs") or {}).get("p95"),
                 (last.get("extraDelayMs") or {}).get("p95")), flush=True)
+        # The audio road's (aroad) repair counters since the page loaded: frames
+        # given up as lost (each followed by a forced IDR) and chunks NACKed.
+        rtp = d.eval("globalThis.__mwRtp ? JSON.stringify({lost: __mwRtp.lost || 0, "
+                     "nacked: __mwRtp.nacked || 0}) : null")
+        if rtp:
+            data["rtp"] = json.loads(rtp)
+            print("  rtp: %(lost)s frames lost, %(nacked)s chunks NACKed" % data["rtp"], flush=True)
         if load_seen:
             data["load"] = load_seen
             print("  load: " + " | ".join("%s %s fps, GPU %s ms, level %s%s" % (
