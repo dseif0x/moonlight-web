@@ -482,6 +482,19 @@ struct EncoderTuning
     /// next to the log when the session ends (plan « le son et la priorité des
     /// paquets », A0). false, the product: nothing kept.
     bool audioLog = false;
+    /// The Opus frame of the native host's sound, in ms: 5 (240 samples, the
+    /// product), 10 or 20 (plan « le son et la priorité des paquets », A3 L2).
+    /// A longer frame waits longer before it leaves, but sends a half or a
+    /// quarter of the packets, each one a Wi-Fi transmission of its own. The
+    /// encoder, the pacer and the relay's RTP clock all follow. 0, the
+    /// product: 5 ms.
+    int audioFrameMs = 0;
+
+    /// Samples per channel of one audio frame at 48 kHz: 240, 480 or 960.
+    int audioFrameSamples() const
+    {
+        return audioFrameMs == 10 ? 480 : audioFrameMs == 20 ? 960 : 240;
+    }
 
     bool isDefault() const
     {
@@ -511,7 +524,7 @@ struct EncoderTuning
                ultraSynthKb == 0 && !ultraUnordered && ultraMbps == 0 && aroadPace < 0 &&
                aroadWindowKb == 0 && aroadBudgetPct == 0 && !relayLog && paceMultiple == 0 &&
                paceBurstKb == 0 && retransCutPermille < 0 && sctpBufferKb == 0 && linkHoldMs == 0 &&
-               sctpMaxBurst < 0 && sctpScheduler < 0 && !audioLog;
+               sctpMaxBurst < 0 && sctpScheduler < 0 && !audioLog && audioFrameMs == 0;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -630,6 +643,7 @@ struct EncoderTuning
         if (sctpMaxBurst >= 0) add("sctpburst=" + std::to_string(sctpMaxBurst));
         if (sctpScheduler >= 0) add("sctpss=" + std::to_string(sctpScheduler));
         if (audioLog) add("audiolog=1");
+        if (audioFrameMs > 0) add("audioframe=" + std::to_string(audioFrameMs));
         return s;
     }
 };

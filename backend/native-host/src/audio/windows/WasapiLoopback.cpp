@@ -34,11 +34,13 @@
 #include <mmdeviceapi.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <exception>
 #include <future>
+#include <string>
 #include <vector>
 
 namespace mw::native::audio {
@@ -185,8 +187,10 @@ struct LoopbackDevice
 
 } // namespace
 
-WasapiLoopback::WasapiLoopback(AudioCallback onPacket)
+WasapiLoopback::WasapiLoopback(AudioCallback onPacket, int frameSamples)
     : m_OnPacket(std::move(onPacket))
+    , m_FrameSamples(AudioPacer::isFrameSamples(frameSamples) ? frameSamples
+                                                              : AudioPacer::kFrameSamples)
 {}
 
 WasapiLoopback::~WasapiLoopback()
@@ -265,7 +269,7 @@ void WasapiLoopback::runLoop()
 
     OpusEncoder encoder;
     std::string error;
-    if (!encoder.open(error)) {
+    if (!encoder.open(error, m_FrameSamples)) {
         resolveFirst(error);
         if (coOwned) CoUninitialize();
         return;
@@ -277,10 +281,10 @@ void WasapiLoopback::runLoop()
         if (coOwned) CoUninitialize();
         return;
     }
-    log::info("[native] audio: WASAPI loopback on the default output, 48 kHz stereo -> Opus 5 ms "
-              "(" +
-              std::string(OpusEncoder::libraryVersion()) + "), endpoint buffer " +
-              std::to_string(device->bufferFrames) + " frames");
+    const int frameMs = m_FrameSamples / (AudioPacer::kSampleRate / 1000);
+    log::info("[native] audio: WASAPI loopback on the default output, 48 kHz stereo -> Opus " +
+              std::to_string(frameMs) + " ms (" + std::string(OpusEncoder::libraryVersion()) +
+              "), endpoint buffer " + std::to_string(device->bufferFrames) + " frames");
     resolveFirst(std::string());
 
     // Pro Audio: the class the OS reserves for exactly this loop. Refused in
@@ -306,9 +310,12 @@ void WasapiLoopback::runLoop()
                          nullptr, FALSE);
     }
 
-    AudioPacer pacer(4);
+    // Four 5 ms frames of slack, 20 ms; longer frames (`audioframe=`) keep the
+    // 20 ms, never fewer than two frames. The tick above stays at 5 ms either
+    // way: it is how often the endpoint is drained, not the frame.
+    AudioPacer pacer(std::max(2, 20 / frameMs), m_FrameSamples);
     pacer.start(steadyNowUs());
-    std::vector<float> frame(AudioPacer::kFrameFloats);
+    std::vector<float> frame(pacer.frameFloats());
     std::vector<uint8_t> packet;
     int64_t lastReopenAttemptUs = 0;
     int64_t lastReportUs = steadyNowUs();
@@ -358,10 +365,10 @@ void WasapiLoopback::runLoop()
             AudioPacket out;
             out.data = packet.data();
             out.size = n;
-            out.samplesPerChannel = AudioPacer::kFrameSamples;
+            out.samplesPerChannel = m_FrameSamples;
             out.capturedUs = now;
             out.queuedFrames = static_cast<int>(pacer.queuedFrames());
-            out.peak = AudioPacer::peakOf(frame.data());
+            out.peak = AudioPacer::peakOf(frame.data(), frame.size());
             out.silence = !captured;
             m_OnPacket(out);
             m_Packets.fetch_add(1, std::memory_order_relaxed);

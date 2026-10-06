@@ -273,6 +273,20 @@ void run_cadence_choice_tests()
         CHECK_EQ(t.describe(), std::string("audiolog=1"));
     }
 
+    // The Opus frame (plan audio + DSCP, A3 L2): 5 ms unless said.
+    SECTION("audioframe= — 240 samples by default, 480 / 960 when set, named");
+    {
+        EncoderTuning t;
+        CHECK_EQ(t.audioFrameMs, 0);
+        CHECK_EQ(t.audioFrameSamples(), 240);
+        t.audioFrameMs = 10;
+        CHECK_EQ(t.audioFrameSamples(), 480);
+        CHECK(!t.isDefault());
+        CHECK_EQ(t.describe(), std::string("audioframe=10"));
+        t.audioFrameMs = 20;
+        CHECK_EQ(t.audioFrameSamples(), 960);
+    }
+
     // A client whose decoder falls silent under the reference repairs asks for
     // none (/start's ref_invalidation): the bench's dpb=1, on every encoder.
     SECTION("refuseReferenceRepairs — one reference for that client, a bench's dpb kept");

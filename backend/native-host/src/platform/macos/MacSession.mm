@@ -273,7 +273,8 @@ public:
                 // one, which clears it before), so setting the flag here would
                 // be quietly wiped.
             }
-            auto sink = std::make_unique<audio::PacedOpusSink>(m_Callbacks.onAudio);
+            auto sink = std::make_unique<audio::PacedOpusSink>(m_Callbacks.onAudio,
+                                                               m_Config.tuning.audioFrameSamples());
             std::string audioError;
             if (sink->start("ScreenCaptureKit, 48 kHz stereo", audioError))
                 m_Audio = std::move(sink);

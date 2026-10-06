@@ -49,7 +49,8 @@ namespace mw::native::audio {
 class WasapiLoopback
 {
 public:
-    explicit WasapiLoopback(AudioCallback onPacket);
+    /// `frameSamples`: 240 (5 ms, the product), 480 or 960 (`audioframe=`).
+    explicit WasapiLoopback(AudioCallback onPacket, int frameSamples = 240);
     ~WasapiLoopback();
     WasapiLoopback(const WasapiLoopback&) = delete;
     WasapiLoopback& operator=(const WasapiLoopback&) = delete;
@@ -70,6 +71,7 @@ private:
     void runLoop();
 
     AudioCallback m_OnPacket;
+    int m_FrameSamples;
     std::thread m_Thread;
     std::atomic<bool> m_Running{false};
     std::atomic<int64_t> m_Packets{0};

@@ -297,14 +297,15 @@ void NativeMediaEngine::startCapture(const StartParams& params)
         qInfo().noquote() << "[NativeMediaEngine] the client's decoder takes no reference "
                              "repairs: one reference, keyframes on loss";
     m_NameLinkDropsKey.store(config.tuning.nameLinkDrops, std::memory_order_release);
+    m_AudioSamplesPerFrame.store(config.tuning.audioFrameSamples(), std::memory_order_release);
 
     std::string error;
-    // Opus packets, 5 ms each, from the engine's audio thread. Emitted as the
-    // same signal the GameStream engine emits from moonlight-common-c's audio
-    // thread: the relays already copy the bytes onto their own thread and
-    // stamp the RTP clock by audioSamplesPerFrame(), which is the 240 the
-    // engine produces. None at all for the guests' feed, whose guests each
-    // capture their own.
+    // Opus packets, 5 ms each (10 or 20 under `audioframe=`), from the
+    // engine's audio thread. Emitted as the same signal the GameStream engine
+    // emits from moonlight-common-c's audio thread: the relays already copy
+    // the bytes onto their own thread and stamp the RTP clock by
+    // audioSamplesPerFrame(), the frame the engine produces. None at all for the guests' feed,
+    // whose guests each capture their own.
     mw::native::AudioCallback onAudio;
     if (params.captureAudio) {
         onAudio = [this](const mw::native::AudioPacket& packet) {
@@ -877,9 +878,9 @@ int NativeMediaEngine::negotiatedVideoFormat() const
 
 int NativeMediaEngine::audioSamplesPerFrame() const
 {
-    // 5 ms at 48 kHz, matching what the pipeline already carries. Real audio
-    // capture will confirm or replace it.
-    return 240;
+    // 5 ms at 48 kHz, the pipeline's frame, unless the session's tuning asked
+    // for 10 or 20 (`audioframe=`): the capture encodes exactly that.
+    return m_AudioSamplesPerFrame.load(std::memory_order_acquire);
 }
 
 double NativeMediaEngine::takeHostProcessingLatencyMs()

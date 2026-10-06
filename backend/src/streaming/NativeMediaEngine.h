@@ -603,6 +603,10 @@ private:
     std::atomic<mw::native::EncoderTuning::Choice> m_NameLinkDropsKey{
         mw::native::EncoderTuning::Choice::Default};
 
+    /// Samples per channel of the session's Opus frames (EncoderTuning's
+    /// `audioframe=`), the relays' RTP step: 240 unless the bench says 480/960.
+    std::atomic<int> m_AudioSamplesPerFrame{240};
+
     // ── The guests' shared feed ─────────────────────────────────────────────
 
     /// The feed worker's publisher (StartParams::feedPublisher), not owned.

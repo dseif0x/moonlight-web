@@ -245,6 +245,9 @@ const char* const kUsage =
     "  audiolog=0|1      each audio packet's way through the host (pacer tick and queue,\n"
     "                    peak, relay thread, RTP track), a CSV next to the log when the\n"
     "                    session ends (plan audio + DSCP, A0)\n"
+    "  audioframe=5|10|20  the Opus frame of the host's sound, in ms: 5 the product; 10 or\n"
+    "                    20 send a half or a quarter of the packets, and wait that much\n"
+    "                    longer before each (plan audio + DSCP, A3 L2)\n"
     "the bench's own:\n"
     "  dump=<path>      the encoded stream as it comes out (Annex-B, or OBUs for AV1)\n"
     "  lose=<frames>[x<burst>][k]  every N frames, report the latest one lost (reference\n"
@@ -602,6 +605,10 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
         const int v = value.toInt(&ok);
         ok = ok && (v == 0 || v == 1);
         tuning.audioLog = v == 1;
+    } else if (key == "audioframe") {
+        const int v = value.toInt(&ok);
+        ok = ok && (v == 5 || v == 10 || v == 20);
+        tuning.audioFrameMs = v == 5 ? 0 : v;
     } else {
         return false;
     }

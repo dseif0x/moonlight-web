@@ -502,7 +502,8 @@ public:
                 m_Info.hostMuted = strategy != audio::HostMute::Strategy::None;
                 log::info(std::string("[native] audio: ") + how);
             }
-            auto audio = std::make_unique<audio::WasapiLoopback>(m_Callbacks.onAudio);
+            auto audio = std::make_unique<audio::WasapiLoopback>(
+                m_Callbacks.onAudio, m_Config.tuning.audioFrameSamples());
             std::string audioError;
             if (audio->start(audioError)) {
                 m_Audio = std::move(audio);
