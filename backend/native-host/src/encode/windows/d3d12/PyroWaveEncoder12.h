@@ -116,6 +116,7 @@ private:
     ID3D12Device* m_Device = nullptr;
     int m_Width = 0, m_Height = 0, m_AlignedW = 0, m_AlignedH = 0;
     std::vector<Band> m_Bands;
+    std::vector<uint32_t> m_SendOrder; // block indices in the order packets() sends them
     uint32_t m_PlaneOf[5][3][4] = {};
     uint32_t m_CoefFloats = 0, m_Blocks8 = 0, m_Blocks32 = 0;
     uint32_t m_PerSubdivision = 0, m_SubdivisionShift = 0, m_BucketBytes = 0;

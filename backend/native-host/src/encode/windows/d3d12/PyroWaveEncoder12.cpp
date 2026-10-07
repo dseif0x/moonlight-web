@@ -195,6 +195,21 @@ void PyroWaveEncoder12::layout()
                 m_Bands.push_back(band);
             }
         }
+
+    // The order blocks go out in: index order, except the finest level (luma
+    // only, the last three bands, the largest), whose three bands are
+    // interleaved by rows of blocks. A decoder by slices can then rebuild the
+    // top of the picture while its bottom is still on the wire. A decoder
+    // doesn't depend on the order: each block carries its index.
+    m_SendOrder.clear();
+    m_SendOrder.reserve(m_Blocks32);
+    const size_t fine = m_Bands.size() - 3;
+    for (uint32_t i = 0; i < m_Bands[fine].first32; i++)
+        m_SendOrder.push_back(i);
+    for (uint32_t y = 0; y < m_Bands[fine].blocks32y; y++)
+        for (size_t k = fine; k < m_Bands.size(); k++)
+            for (uint32_t x = 0; x < m_Bands[k].blocks32x; x++)
+                m_SendOrder.push_back(m_Bands[k].first32 + y * m_Bands[k].blocks32x + x);
     m_PerSubdivision =
         nextPow2((uint32_t(alignUp(int(m_Blocks32), kSubdivisions))) / kSubdivisions);
     m_SubdivisionShift = 0;
@@ -516,7 +531,7 @@ bool PyroWaveEncoder12::packets(size_t boundary, std::vector<std::vector<uint8_t
         header[1] = nonZero & 0xffffff; // code 0 = start of frame, chroma 0 = 4:2:0
         std::vector<uint8_t> packet(reinterpret_cast<uint8_t*>(header),
                                     reinterpret_cast<uint8_t*>(header) + 8);
-        for (uint32_t i = 0; i < m_Blocks32; i++) {
+        for (uint32_t i : m_SendOrder) {
             uint32_t offset = table[2 * i], words = table[2 * i + 1];
             if (!words) continue;
             size_t size = size_t(words) * 4;

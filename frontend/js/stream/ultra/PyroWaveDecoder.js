@@ -35,8 +35,10 @@ struct BlockMeta { plane: u32, width: u32, height: u32, xy: u32 }
 @group(0) @binding(1) var<storage, read> offsets: array<u32>;
 @group(0) @binding(2) var<storage, read> metas: array<BlockMeta>;
 @group(0) @binding(3) var<storage, read_write> coef: array<f32>;
-// x: the first block of the dispatch (a slice starts past the blocks before it).
+// x: the first block of the dispatch, in send order (a slice starts past the
+// blocks before it); order[] turns a send position into a block index.
 @group(0) @binding(4) var<uniform> range: vec4u;
+@group(0) @binding(5) var<storage, read> order: array<u32>;
 
 var<workgroup> sharedOffset: u32;
 var<workgroup> planeOffsets: array<u32, 16>;
@@ -65,7 +67,7 @@ fn decodeQuant(q: u32) -> f32 {
 
 @compute @workgroup_size(128)
 fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) li: u32) {
-    let blockIndex = wg.x + range.x;
+    let blockIndex = order[wg.x + range.x];
     let bm = metas[blockIndex];
     if (li == 0u) { sharedOffset = offsets[blockIndex]; }
     let off = workgroupUniformLoad(&sharedOffset);
@@ -186,7 +188,8 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) li: u
 // upstream's (dwt_common.h, idwt.comp). Scaling and mirroring before the row
 // pass is the same as upstream's after it: both are per-row and linear.
 const IDWT_WGSL = /* wgsl */ `
-struct Pass { w: u32, h: u32, comps: u32, pad: u32, bands: array<vec4u, 3>, outs: vec4u }
+// y0: the first row of tiles (the finest level goes by stripes, as its blocks come).
+struct Pass { w: u32, h: u32, comps: u32, y0: u32, bands: array<vec4u, 3>, outs: vec4u }
 @group(0) @binding(0) var<uniform> p: Pass;
 @group(0) @binding(1) var<storage, read_write> coef: array<f32>;
 
@@ -240,7 +243,8 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_id) lid: vec
     let bands = p.bands[wg.z];  // LL, HL, LH, HH of this component
     let dst = p.outs[wg.z];
     let ox = i32(wg.x * 32u) - 4;
-    let oy = i32(wg.y * 32u) - 4;
+    let ty = wg.y + p.y0;
+    let oy = i32(ty * 32u) - 4;
     for (var y = t.y; y < SPAN; y += T) {
         let sy = mirror(oy + i32(y), i32(h2));
         let yOdd = (sy & 1) == 1;
@@ -269,7 +273,7 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_id) lid: vec
     liftCols(t, 5u, 35u, ALPHA);
 
     for (var y = t.y; y < 32u; y += T) {
-        let gy = wg.y * 32u + y;
+        let gy = ty * 32u + y;
         for (var x = t.x; x < 32u; x += T) {
             let gx = wg.x * 32u + x;
             if (gx < w2 && gy < h2) {
@@ -373,6 +377,8 @@ export class PyroWaveDecoder extends PyroWaveFrame {
         this.offsetsBuf = d.createBuffer({ size: this.offsetsCpu.byteLength, usage: S | C });
         this.metaBuf = d.createBuffer({ size: this.metas.byteLength, usage: S | C });
         d.queue.writeBuffer(this.metaBuf, 0, this.metas);
+        this.orderBuf = d.createBuffer({ size: this.sendOrder.byteLength, usage: S | C });
+        d.queue.writeBuffer(this.orderBuf, 0, this.sendOrder);
         this.rangeBuf = d.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | C });
         this._rangeFirst = 0;
         this.coefBuf = d.createBuffer({
@@ -426,9 +432,18 @@ export class PyroWaveDecoder extends PyroWaveFrame {
             // The level's bands are whole once the blocks before the next
             // (finer) level's are: they come in that order.
             const end = level === 0 ? this.blockCount : this.firstBlockOf[`${level - 1},0,1`];
-            this.passes.push({ w, h, comps, end, u: [w, h, comps, 0, ...bands, ...outs, 0] });
+            this.passes.push({
+                w,
+                h,
+                comps,
+                end,
+                tileRows: Math.ceil((2 * h) / 32),
+                u: [w, h, comps, 0, ...bands, ...outs, 0],
+            });
         }
         const slot = 256;
+        this._slot = slot;
+        this._fineY0 = 0;
         this.uniformBuf = d.createBuffer({
             size: slot * (this.passes.length + 1),
             usage: GPUBufferUsage.UNIFORM | C,
@@ -470,6 +485,7 @@ export class PyroWaveDecoder extends PyroWaveFrame {
                 { binding: 2, resource: { buffer: this.metaBuf } },
                 { binding: 3, resource: { buffer: this.coefBuf } },
                 { binding: 4, resource: { buffer: this.rangeBuf } },
+                { binding: 5, resource: { buffer: this.orderBuf } },
             ],
         });
     }
@@ -492,28 +508,56 @@ export class PyroWaveDecoder extends PyroWaveFrame {
         this._rangeFirst = first;
     }
 
+    // The first row of tiles of the finest level's next inverse wavelet,
+    // written only when it changes (the other levels keep 0).
+    _setFineY0(y0) {
+        if (y0 === this._fineY0) return;
+        const k = this.passes.length - 1;
+        this.device.queue.writeBuffer(this.uniformBuf, this._slot * k + 12, new Uint32Array([y0]));
+        this._fineY0 = y0;
+    }
+
+    // Rows of tiles of the finest level computable from its first `settled`
+    // rows of blocks: a 32-row tile reads 16 band rows, plus 2 of apron each
+    // side, and the band's last row covers the mirrored bottom.
+    _fineTileRows(settled) {
+        if (settled >= this.fineRows) return this.passes[this.passes.length - 1].tileRows;
+        let t = 0;
+        while (Math.min((16 * t + 17) >> 5, this.fineRows - 1) < settled) t++;
+        return t;
+    }
+
     /** Starts a frame decoded by slices (after clear()): nothing of it is on the GPU yet. */
     startSlices() {
         this._sentWords = 0;
         this._dequantDone = 0;
         this._levelsDone = 0;
+        this._tileRowsDone = 0;
     }
 
     /**
      * Records, for the frame coming by slices, what its blocks so far allow:
-     * the dequantization of the blocks new since the last call (every block
-     * below the frontier is settled, came or not), and the inverse wavelet of
-     * each level now whole. `last`: the frame is all there, everything left
-     * is recorded. One call per command encoder (the dispatch offset is a
-     * queue write). False when there was nothing new to record.
+     * the dequantization of the blocks new since the last call, in send order
+     * (every block before the frontier is settled, came or not), the inverse
+     * wavelet of each coarse level now whole, and of the finest level the
+     * stripe of tiles its settled rows of blocks allow. `last`: the frame is
+     * all there, everything left is recorded. One call per command encoder
+     * (the dispatch offsets are queue writes). False when there was nothing
+     * new to record.
      */
     decodeSlice(encoder, last = false, timestampWrites) {
         const d = this.device;
         const end = last ? this.blockCount : this.frontier;
         const from = this._dequantDone;
+        const fine = this.passes.length - 1;
         let levels = this._levelsDone;
-        while (levels < this.passes.length && this.passes[levels].end <= end) levels++;
-        if (end <= from && levels === this._levelsDone && !last) return false;
+        while (levels < fine && this.passes[levels].end <= end) levels++;
+        let rows = this._tileRowsDone;
+        if (levels === fine) {
+            rows = last ? this.passes[fine].tileRows : this._fineTileRows(this.fineRowsSettled());
+        }
+        if (end <= from && levels === this._levelsDone && rows === this._tileRowsDone && !last)
+            return false;
         if (this.payloadWords > this._sentWords) {
             d.queue.writeBuffer(
                 this.payloadBuf,
@@ -526,26 +570,39 @@ export class PyroWaveDecoder extends PyroWaveFrame {
         }
         const pass = encoder.beginComputePass(timestampWrites ? { timestampWrites } : undefined);
         if (end > from) {
-            d.queue.writeBuffer(this.offsetsBuf, from * 4, this.offsetsCpu, from, end - from);
+            // The offsets of the new blocks: one span of indices around them.
+            let lo = this.blockCount;
+            let hi = 0;
+            for (let p = from; p < end; p++) {
+                const i = this.sendOrder[p];
+                if (i < lo) lo = i;
+                if (i >= hi) hi = i + 1;
+            }
+            d.queue.writeBuffer(this.offsetsBuf, lo * 4, this.offsetsCpu, lo, hi - lo);
             this._setRangeFirst(from);
             pass.setPipeline(this.dequantPipe);
             pass.setBindGroup(0, this.dequantBind);
             pass.dispatchWorkgroups(end - from);
             this._dequantDone = end;
         }
-        if (levels > this._levelsDone) {
+        if (levels > this._levelsDone || rows > this._tileRowsDone) {
             pass.setPipeline(this.idwtPipe);
             for (let k = this._levelsDone; k < levels; k++) this._idwt(pass, this.passes[k]);
             this._levelsDone = levels;
+            if (rows > this._tileRowsDone) {
+                this._setFineY0(this._tileRowsDone);
+                this._idwt(pass, this.passes[fine], rows - this._tileRowsDone);
+                this._tileRowsDone = rows;
+            }
         }
         pass.end();
         if (last) this.decodedThisSeq = true;
         return true;
     }
 
-    _idwt(pass, p) {
+    _idwt(pass, p, rows = p.tileRows) {
         pass.setBindGroup(0, p.bind);
-        pass.dispatchWorkgroups(Math.ceil((2 * p.w) / 32), Math.ceil((2 * p.h) / 32), p.comps);
+        pass.dispatchWorkgroups(Math.ceil((2 * p.w) / 32), rows, p.comps);
     }
 
     /**
@@ -567,6 +624,7 @@ export class PyroWaveDecoder extends PyroWaveFrame {
             pass.dispatchWorkgroups(this.blockCount);
         }
         if (run('idwt')) {
+            this._setFineY0(0);
             pass.setPipeline(this.idwtPipe);
             for (const p of this.passes) this._idwt(pass, p);
         }
@@ -651,6 +709,7 @@ export class PyroWaveDecoder extends PyroWaveFrame {
             this.payloadBuf,
             this.offsetsBuf,
             this.metaBuf,
+            this.orderBuf,
             this.coefBuf,
             this.packedBuf,
             this.uniformBuf,

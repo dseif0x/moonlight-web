@@ -138,15 +138,11 @@
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
         });
 
-        // A frame's packets back to back, cut in `n` pieces at byte offsets
-        // that fall inside blocks.
+        // A frame's blocks back to back in our host's send order (the
+        // reference encoder's corpus comes in index order), cut in `n`
+        // pieces at byte offsets that fall inside blocks.
         const pieces = (packets, n) => {
-          const all = new Uint8Array(packets.reduce((a, p) => a + p.length, 0));
-          let at = 0;
-          for (const p of packets) {
-            all.set(p, at);
-            at += p.length;
-          }
+          const all = dec.toSendOrder(packets);
           const cuts = [];
           for (let k = 0; k < n; k++)
             cuts.push(

@@ -83,6 +83,66 @@ export class PyroWaveFrame {
         }
         this.blockCount = metas.length / 4;
         this.metas = new Uint32Array(metas);
+
+        // The order our host sends blocks in (PyroWaveEncoder12::layout):
+        // index order, except the finest level's three bands, interleaved by
+        // rows of blocks. `sendOrder[pos]` is a block index, `posOf` the inverse.
+        const f1 = this.firstBlockOf['0,0,1'];
+        this.fineCols = Math.ceil(W / 2 / 32);
+        this.fineRows = Math.ceil(H / 2 / 32);
+        this.fineFirst = f1;
+        this.sendOrder = new Uint32Array(this.blockCount);
+        this.posOf = new Uint32Array(this.blockCount);
+        let pos = 0;
+        for (let i = 0; i < f1; i++) this.sendOrder[pos++] = i;
+        const bandBlocks = this.fineCols * this.fineRows;
+        for (let y = 0; y < this.fineRows; y++)
+            for (let b = 0; b < 3; b++)
+                for (let x = 0; x < this.fineCols; x++)
+                    this.sendOrder[pos++] = f1 + b * bandBlocks + y * this.fineCols + x;
+        this.sendOrder.forEach((index, p) => (this.posOf[index] = p));
+    }
+
+    /** Rows of blocks of the finest level whose three bands are settled below the frontier. */
+    fineRowsSettled() {
+        return Math.max(0, Math.floor((this.frontier - this.fineFirst) / (3 * this.fineCols)));
+    }
+
+    /**
+     * A frame's packets (any block order, the reference encoder's for one)
+     * as one buffer in our host's send order: what a decode by slices expects.
+     */
+    toSendOrder(packets) {
+        let header = null;
+        const blocks = new Array(this.blockCount);
+        let total = 0;
+        for (const p of packets) {
+            const dv = new DataView(p.buffer, p.byteOffset, p.byteLength);
+            for (let pos = 0; pos + 8 <= p.byteLength; ) {
+                const w0 = dv.getUint32(pos, true);
+                if (w0 >>> 31) {
+                    header = p.subarray(pos, pos + 8);
+                    pos += 8;
+                    continue;
+                }
+                const size = ((w0 >>> 16) & 0xfff) * 4;
+                blocks[dv.getUint32(pos + 4, true) >>> 8] = p.subarray(pos, pos + size);
+                total += size;
+                pos += size;
+            }
+        }
+        const out = new Uint8Array((header ? 8 : 0) + total);
+        let at = 0;
+        if (header) {
+            out.set(header);
+            at = 8;
+        }
+        for (const index of this.sendOrder) {
+            if (!blocks[index]) continue;
+            out.set(blocks[index], at);
+            at += blocks[index].length;
+        }
+        return out;
     }
 
     clear() {
@@ -92,8 +152,8 @@ export class PyroWaveFrame {
         this.totalBlocks = this.blockCount;
         this.lastSeq = -1;
         this.decodedThisSeq = false;
-        // One past the highest block seen: the host sends blocks in index
-        // order, so every block below it that has not come never will.
+        // One past the furthest block seen, in send order (`sendOrder`):
+        // every block before it that has not come never will.
         this.frontier = 0;
     }
 
@@ -136,6 +196,9 @@ export class PyroWaveFrame {
             const block = w1 >>> 8;
             if (block >= this.blockCount) return -1;
             if (this.offsetsCpu[block] === NONE) {
+                // By slices, a block behind the frontier would land where the
+                // GPU already took it as absent: a host that sends another order.
+                if (piece && this.posOf[block] < this.frontier) return -1;
                 this._ensurePayload(this.payloadWords + words);
                 this.offsetsCpu[block] = this.payloadWords;
                 // The block's words, copied as they are (little-endian on every WebGPU platform).
@@ -143,7 +206,8 @@ export class PyroWaveFrame {
                 new Uint8Array(this.payloadCpu.buffer, this.payloadWords * 4, words * 4).set(src);
                 this.payloadWords += words;
                 this.decodedBlocks++;
-                if (block >= this.frontier) this.frontier = block + 1;
+                const p = this.posOf[block];
+                if (p >= this.frontier) this.frontier = p + 1;
             }
             pos += words * 4;
         }
