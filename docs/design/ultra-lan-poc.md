@@ -1706,6 +1706,42 @@ tranches (`sl1`) contre image entière (`sl0`), 60 clics chacune
   visible : que l'hôte entrelace les rangées du niveau fin, et que la page
   inverse ce niveau par bandes horizontales.
 
+### 6.24 Le niveau fin entrelacé par rangées, inversé par bandes (07/10/2026, 06:40)
+
+La seconde moitié du §6.23 (`5e9ef99c`) :
+
+- **L'hôte envoie les blocs dans l'ordre des index, sauf le niveau fin.**
+  Ses trois bandes (luma seule, la moitié des octets) partent entrelacées
+  par rangées de blocs : rangée 0 de HL, de LH, de HH, puis rangée 1, etc.
+  Chaque bloc porte son index, et un décodeur ne dépend pas de l'ordre.
+- **Aucun bit libre ne signale cet ordre** dans l'en-tête de PyroWave. La
+  page le suppose donc. Un bloc qui arrive derrière la frontière (un hôte
+  qui envoie un autre ordre) annule les tranches de l'image, qui est alors
+  décodée entière. Le résultat reste juste, il n'y a que le gain de perdu.
+- **La page déquantifie dans l'ordre d'envoi**, par une table position →
+  index. Elle inverse le niveau fin par bandes de tuiles de 32 lignes, dès
+  que les rangées de blocs qu'elles lisent sont réglées (16 lignes de bande
+  plus 2 de marge de chaque côté).
+
+Le labo (`decoder_lab.py --slices N`, le corpus de référence remis dans
+l'ordre d'envoi) est exact, comme l'image entière : écart max 1 sur
+SwiftShader et sur le 780M. GPU restant au dernier morceau, 780M, 1080p :
+
+| Morceaux | `game10` §6.23 → §6.24 | `text10` §6.23 → §6.24 |
+|---|---|---|
+| Image entière | 1,98 ms | 1,97 ms |
+| 4 | 1,46 → 1,46 ms | 0,82 → 0,58 ms |
+| 8 | 0,82 → 0,48 ms | 0,78 → 0,33 ms |
+| 16 | 0,78 → 0,34 ms | 0,77 → 0,18 ms |
+
+- **Le plancher de ~0,8 ms est tombé.** Le dernier morceau ne porte plus
+  que la fin de l'inverse du niveau fin, pas l'inverse entier.
+- **À 4 morceaux, `game10` ne gagne rien** : son dernier quart commence
+  avant le niveau fin, et tout le niveau fin reste à faire à l'arrivée.
+- Sur le câble à 120 i/s, une image fait ~3 morceaux de 48 Kio. Le
+  morceau plus petit (`mw_ultra_slice_kb`) est donc à essayer avec cette
+  passe.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
