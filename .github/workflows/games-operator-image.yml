@@ -30,6 +30,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive # moonlight-common-c, libdatachannel, openh264, qmdnsengine
       - id: ver
         shell: bash
         run: |
