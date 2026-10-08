@@ -20,8 +20,9 @@ after the flag was composed.
 
 The legs, in ms:
   queue      received by the relay → SendInput called (a SYSTEM worker's hop)
-  sendinput  the SendInput call
-  hook       SendInput returned → the flag's hook ran   (app: → WM_LBUTTONDOWN)
+  sendinput  the SendInput call — which returns only after every low-level
+             mouse hook ran, the flag's included
+  hook       SendInput called → the flag's hook ran    (app: → WM_LBUTTONDOWN)
   raise      hook → flag shown (its window painted)     (app: → Present returned)
   composed   shown → DWM composed it (DwmFlush returned) (app: → on the screen)
   present    shown → the present of the frame that showed it (LastPresentTime)
@@ -156,11 +157,13 @@ def one(tag, a):
     for fl in flags:
         s_us = fl["shown"]
         hook = fl.get("hook") or None
-        # The press that raised it: the last one handed over before the hook
-        # (before the flag, when the hook was not logged), within 50 ms.
+        # The press that raised it: the last SendInput begun before the hook
+        # (before the flag, when the hook was not logged), within 50 ms. Not
+        # the last one ended: SendInput returns only once every low-level
+        # hook has run, the flag's among them.
         ref = hook or s_us
-        i = bisect.bisect_right([p[1] for p in presses], ref) - 1
-        press = presses[i] if i >= 0 and ref - presses[i][1] < 50000 else None
+        i = bisect.bisect_right([p[0] for p in presses], ref) - 1
+        press = presses[i] if i >= 0 and ref - presses[i][0] < 50000 else None
         rel = None
         if press:
             for recv, done in relay:
@@ -185,7 +188,7 @@ def one(tag, a):
         if press:
             row["sendinput"] = (press[1] - press[0]) / 1000
             if hook:
-                row["hook"] = (hook - press[1]) / 1000
+                row["hook"] = (hook - press[0]) / 1000
         if rel and press:
             row["queue"] = (press[0] - rel[0]) / 1000
         if hook:

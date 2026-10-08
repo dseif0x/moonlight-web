@@ -41,9 +41,24 @@ def row(name, xs):
         name, q(xs, .5), q(xs, .9), statistics.mean(xs), len(xs))
 
 
-def offsets(recs, window_ms):
+def drift(recs):
+    """How fast the GPU's clock runs against the page's: the slope of the
+    midpoint of the two bounds over time, by least squares. The 780M's ran
+    0.2 % apart on 08/10/2026 (16 ms in 8 s), more than a window holds."""
+    pts = [(r["t1"], ((r["t1"] - r["gpu"][0] / 1e6) + (r["t2"] - r["gpu"][-1] / 1e6)) / 2)
+           for r in recs]
+    if len(pts) < 2:
+        return 0.0
+    mx = statistics.mean(p[0] for p in pts)
+    my = statistics.mean(p[1] for p in pts)
+    den = sum((p[0] - mx) ** 2 for p in pts)
+    return sum((p[0] - mx) * (p[1] - my) for p in pts) / den if den else 0.0
+
+
+def offsets(recs, window_ms, slope=0.0):
     """Per record, the GPU -> page offset bounds (ms), from every record (frames
-    and references alike: one pair of clocks) in its window of time."""
+    and references alike: one pair of clocks) in its window of time, the
+    clocks' drift taken out (the bounds are of offset - slope x t1)."""
     recs = sorted(recs, key=lambda r: r["t1"])
     out = {}
     i = 0
@@ -52,15 +67,15 @@ def offsets(recs, window_ms):
         while j < len(recs) and recs[j]["t1"] - recs[i]["t1"] < window_ms:
             j += 1
         chunk = recs[i:j]
-        lo = max(r["t1"] - r["gpu"][0] / 1e6 for r in chunk)
-        hi = min(r["t2"] - r["gpu"][-1] / 1e6 for r in chunk)
+        lo = max(r["t1"] - r["gpu"][0] / 1e6 - slope * r["t1"] for r in chunk)
+        hi = min(r["t2"] - r["gpu"][-1] / 1e6 - slope * r["t1"] for r in chunk)
         for r in chunk:
             out[id(r)] = (lo, hi)
         i = j
     return out
 
 
-def split(recs, off, label):
+def split(recs, off, label, slope=0.0):
     windows = {off[id(r)] for r in recs}
     bad = sum(1 for lo, hi in windows if lo > hi)
     width = [hi - lo for lo, hi in windows if hi >= lo]
@@ -69,8 +84,8 @@ def split(recs, off, label):
               label, len(recs), len(windows), bad, q(width, .5)))
     for which, k in (("offset at its lower bound (start = earliest)", 0),
                      ("offset at its upper bound (end = latest)", 1)):
-        start = [r["gpu"][0] / 1e6 + off[id(r)][k] - r["t1"] for r in recs]
-        tail = [r["t2"] - (r["gpu"][-1] / 1e6 + off[id(r)][k]) for r in recs]
+        start = [r["gpu"][0] / 1e6 + off[id(r)][k] + slope * r["t1"] - r["t1"] for r in recs]
+        tail = [r["t2"] - (r["gpu"][-1] / 1e6 + off[id(r)][k] + slope * r["t1"]) for r in recs]
         print(" " + which)
         print(row("submit -> GPU starts", start))
         print(row("GPU ends -> work done fires", tail))
@@ -99,7 +114,10 @@ def main():
 
     gpu = [r for r in frames if r.get("gpu") and len(r["gpu"]) == 4]
     rg = [r for r in refs if r.get("gpu") and len(r["gpu"]) == 2]
-    off = offsets(gpu + rg, a.window_ms)
+    slope = drift(gpu + rg)
+    off = offsets(gpu + rg, a.window_ms, slope)
+    if gpu or rg:
+        print("GPU clock against the page's: %+.0f ppm (taken out)" % (slope * 1e6))
     if gpu:
         quantized = all(v % QUANTUM_NS == 0 for r in gpu for v in r["gpu"])
         if quantized:
@@ -110,14 +128,14 @@ def main():
         print(row("gap decode -> present", [(r["gpu"][2] - r["gpu"][1]) / 1e6 for r in gpu]))
         print(row("present pass", [(r["gpu"][3] - r["gpu"][2]) / 1e6 for r in gpu]))
         print(row("first begin -> last end", [(r["gpu"][3] - r["gpu"][0]) / 1e6 for r in gpu]))
-        split(gpu, off, "frames")
+        split(gpu, off, "frames", slope)
 
     if refs:
         print("empty references (ms):")
         print(row("submitted -> work done", [r["t2"] - r["t1"] for r in refs]))
         if rg:
             print(row("empty pass on the GPU", [(r["gpu"][1] - r["gpu"][0]) / 1e6 for r in rg]))
-            split(rg, off, "references")
+            split(rg, off, "references", slope)
 
     # The draw: the page's frame log, joined on the host's capture stamp.
     path = base + ".frames.csv"
