@@ -209,6 +209,8 @@ export const GamesOperator = {
             this._status('Starting the stream…');
             this.streamed = true;
             this._watchStream();
+            // HostListView decorates its hosts with a display name; launchApp logs it.
+            if (!host.displayName) host.displayName = host.customName || host.name;
             await this.app.launchApp(host, mwApp);
         } catch (err) {
             this._fail(err);

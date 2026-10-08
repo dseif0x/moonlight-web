@@ -14,7 +14,7 @@
  * You should have received a copy of the GNU General Public License along with
  * this program. If not, see <https://www.gnu.org/licenses/>.
  */
-import { url } from '../util/basePath.js';
+import { url, isEmbedded } from '../util/basePath.js';
 
 /**
  * The application's end of the rendezvous connection.
@@ -261,6 +261,9 @@ function serveWorkerRequests() {
  * there is nothing to start in that case.
  */
 export async function startTunnel(onStage) {
+    // games-operator embedded mode: no rendezvous tunnel, the hub's proxy is the
+    // only way in, and the module is not served below the mount prefix.
+    if (isEmbedded()) return false;
     if (!('serviceWorker' in navigator)) return false;
 
     // The bootstrap's transport, from the bootstrap's own origin. On a direct
