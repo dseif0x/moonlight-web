@@ -95,6 +95,7 @@ add_executable(run_tests
     test_logger_rotation.cpp
     test_control_channel.cpp
     test_feed_ipc.cpp
+    test_cert_manager.cpp
     # In-scope production units (+ their real deps)
     # The router-port allocation policy, behind its gateway seam: the rules
     # that keep two MoonlightWeb hosts on one LAN out of each other's holes.
@@ -118,6 +119,8 @@ add_executable(run_tests
     ${_src}/src/server/RestRouter.cpp
     ${_src}/src/server/AppSettings.cpp
     ${_src}/src/server/AuthManager.cpp
+    # The local self-signed cert: its key outlives a restart (clients pin it).
+    ${_src}/src/server/CertManager.cpp
     ${_src}/src/server/ConnectionGuard.cpp
     ${_src}/src/server/StaticFileHandler.cpp
     ${_src}/src/server/HomeScreenShell.cpp
@@ -172,6 +175,12 @@ target_include_directories(run_tests PRIVATE
 
 # Silence production qDebug() noise; keep qInfo()/qCritical() (test output).
 target_compile_definitions(run_tests PRIVATE QT_NO_DEBUG_OUTPUT)
+# CertManager's public-cert search paths, as in the server build. The tests only
+# exercise the local cert, which lives in the runner's AppData.
+target_compile_definitions(run_tests PRIVATE
+    FRONTEND_DIR="${_src}/../frontend/"
+    CERT_DIR="${_src}/cert/"
+)
 
 target_link_libraries(run_tests PRIVATE
     Qt6::Core Qt6::Network Qt6::WebSockets
