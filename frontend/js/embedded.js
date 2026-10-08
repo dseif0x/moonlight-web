@@ -197,8 +197,11 @@ export const GamesOperator = {
             this.play = play;
             this._show({ title: play.app.name, status: 'Connecting to the Moonlight host…' });
 
-            const host = await this._ensureHost(play);
+            let host = await this._ensureHost(play);
             await this._ensureBackend(host, play);
+            // Setting a Wolf backend pairs the host by itself (ensurePaired);
+            // read the host again before deciding whether anything is left.
+            host = this._matchHost(await this._hosts(), play) || host;
             await this._ensurePaired(host);
             await this._waitForApp(play);
             const mwApp = await this._findApp(host, play);
@@ -255,7 +258,10 @@ export const GamesOperator = {
         if (host.pairState === 'paired') return;
         this._status('Pairing with the host…');
         const started = await BackendClient.startPairing(host.uuid);
-        if (started.status === 'error') throw new Error(started.message || 'pairing failed');
+        if (started.status === 'error') {
+            if (/already paired/i.test(started.message || '')) return;
+            throw new Error(started.message || 'pairing failed');
+        }
         for (let i = 0; i < 60; i++) {
             const r = await BackendClient.confirmPairing(host.uuid);
             if (r.status === 'paired') return;
