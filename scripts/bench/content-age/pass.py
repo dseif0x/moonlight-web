@@ -526,6 +526,13 @@ def main():
                 "%s %s" % (k, (data["ultraPlayer"].get(k) or {}).get("p50"))
                 for k in ("wait", "parse", "record", "done", "frame", "gpuDecode", "gpuPresent")),
                 flush=True)
+            # Plan "attente" B0 (localStorage mw_ultra_trace=1): every frame's
+            # timeline, beside the pass, for scripts/bench/clickpath/gpuwait.py.
+            if data["ultraPlayer"].get("traced"):
+                trace = d.eval("JSON.stringify(__mwUltraPlayer.trace)")
+                with open(os.path.join(age.OUT, a.tag + ".ultratrace.json"), "w") as f:
+                    f.write(trace)
+                print("  pyrowave trace: %s records" % data["ultraPlayer"]["traced"], flush=True)
         if load_seen:
             data["load"] = load_seen
             print("  load: " + " | ".join("%s %s fps, GPU %s ms, level %s%s" % (

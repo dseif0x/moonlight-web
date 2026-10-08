@@ -44,6 +44,15 @@ import { PyroWaveDecoderGL, glDecoderSupported } from './PyroWaveDecoderGL.js';
 const KEEP = 4096;
 // One frame in this many carries GPU timestamps (their read-back costs a map).
 const GPU_EVERY = 8;
+// Bench switch (localStorage mw_ultra_trace=1, plan "attente" B0): every frame's
+// timeline is kept, GPU timestamps on every frame (this many read-backs in
+// flight), and after one frame in REF_EVERY, when nothing waits, an empty
+// reference pass: what submit → work done costs Chrome with no work at all.
+const TRACE_KEEP = 16384;
+const TRACE_READS = 6;
+const REF_EVERY = 8;
+// A query set resolves at a multiple of 256 bytes.
+const RESOLVE_STRIDE = 256;
 
 function quantiles(xs) {
     if (!xs.length) return null;
@@ -102,13 +111,29 @@ export class UltraPlayer {
             gpuDecode: [],
             gpuPresent: [],
         };
-        this._gpuReading = false;
+        // GPU timestamp read-backs: one normally, TRACE_READS when tracing.
+        this._reads = [];
         // Bench switch (localStorage mw_ultra_early=1): hand the frame over at submit.
         try {
             this.early = globalThis.localStorage?.getItem('mw_ultra_early') === '1';
         } catch {
             this.early = false;
         }
+        // The timeline, when traced: one record per frame decoded, all on
+        // performance.now() but the GPU's (ns, its own clock, put on this one
+        // by the bench from the bounds submit and work done give it).
+        //   frame: {host, ts, at, t0, t1, t2, t3, sliced, gpu: [decode begin,
+        //          end, present begin, end] | null}
+        //   reference: {ref: true, t1, t2, gpu: [begin, end] | null}
+        // at: the frame in; t0: its decode starts; t1: submitted; t2: work
+        // done; t3: the VideoFrame made.
+        this.trace = null;
+        try {
+            if (globalThis.localStorage?.getItem('mw_ultra_trace') === '1') this.trace = [];
+        } catch {
+            this.trace = null;
+        }
+        this._refCount = 0;
         globalThis.__mwUltraPlayer = this;
     }
 
@@ -125,6 +150,7 @@ export class UltraPlayer {
             stats: { ...this.stats },
             gpuTimestamps: !!this._querySet,
             early: this.early,
+            traced: this.trace ? this.trace.length : null,
         };
         for (const [k, xs] of Object.entries(this.times)) out[k] = quantiles(xs);
         return out;
@@ -162,15 +188,19 @@ export class UltraPlayer {
         this.context = this.canvas.getContext('webgpu');
         this.context.configure({ device: this.device, format: 'rgba8unorm', alphaMode: 'opaque' });
         if (timestamps) {
+            const reads = this.trace ? TRACE_READS : 1;
             this._querySet = this.device.createQuerySet({ type: 'timestamp', count: 4 });
             this._queryBuf = this.device.createBuffer({
-                size: 32,
+                size: RESOLVE_STRIDE * reads,
                 usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
             });
-            this._queryRead = this.device.createBuffer({
-                size: 32,
-                usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-            });
+            for (let i = 0; i < reads; i++) {
+                const buf = this.device.createBuffer({
+                    size: 32,
+                    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+                });
+                this._reads.push({ buf, slot: i, busy: false });
+            }
         }
         this.api = 'webgpu';
         this.log('[MW-ULTRA] PyroWave decoder ready, ' + this.width + 'x' + this.height);
@@ -322,11 +352,10 @@ export class UltraPlayer {
         const t0 = performance.now();
         if (this.gl) return this._runGL(timestamp, backendTs, t0);
         const enc = this.device.createCommandEncoder();
-        // Now and then, GPU timestamps around both passes (when the adapter has them).
-        const q =
-            this._querySet && !this._gpuReading && this.stats.frames % GPU_EVERY === 0
-                ? this._querySet
-                : null;
+        // Now and then (every frame, traced), GPU timestamps around both
+        // passes, when the adapter has them and a read-back is free.
+        const read = this.trace || this.stats.frames % GPU_EVERY === 0 ? this._freeRead() : null;
+        const q = read ? this._querySet : null;
         const tw = (a, b) =>
             q ? { querySet: q, beginningOfPassWriteIndex: a, endOfPassWriteIndex: b } : undefined;
         // Dequantization and the inverse transform only: the present pass
@@ -335,14 +364,25 @@ export class UltraPlayer {
         if (job.slice) dec.decodeSlice(enc, true, tw(0, 1));
         else dec.decode(enc, tw(0, 1), ['dequant', 'idwt']);
         dec.present(enc, this.context, this.limited, tw(2, 3));
-        if (q) {
-            enc.resolveQuerySet(q, 0, 4, this._queryBuf, 0);
-            enc.copyBufferToBuffer(this._queryBuf, 0, this._queryRead, 0, 32);
-        }
+        if (read) this._resolveInto(enc, read, 4);
         this.device.queue.submit([enc.finish()]);
         const t1 = performance.now();
         this._note('record', t1 - t0);
-        if (q) this._readGpuTimes();
+        const rec = this.trace
+            ? {
+                  host: backendTs,
+                  ts: timestamp,
+                  at: job.at,
+                  t0,
+                  t1,
+                  t2: null,
+                  t3: null,
+                  sliced: !!job.slice,
+                  gpu: null,
+              }
+            : null;
+        if (rec) this._keep(rec);
+        if (read) this._readGpuTimes(read, 4, rec);
         const emit = (from) => {
             let frame = null;
             try {
@@ -353,6 +393,7 @@ export class UltraPlayer {
             }
             const t3 = performance.now();
             this._note('frame', t3 - from);
+            if (rec) rec.t3 = t3;
             if (frame) this.onFrame(frame, { timestamp, backendTs, decodeMs: t3 - t0 });
         };
         // Early: the frame goes to the page as soon as the work is submitted;
@@ -365,7 +406,11 @@ export class UltraPlayer {
                 this.stats.frames++;
                 const t2 = performance.now();
                 this._note('done', t2 - t1);
+                if (rec) rec.t2 = t2;
                 if (!this.early) emit(t2);
+                // Traced: an empty reference now and then, on an idle GPU.
+                if (this.trace && !this._waiting && ++this._refCount % REF_EVERY === 0)
+                    this._reference();
                 this._next();
             },
             () => {
@@ -431,20 +476,71 @@ export class UltraPlayer {
         this._channel.port2.postMessage(0);
     }
 
-    _readGpuTimes() {
-        this._gpuReading = true;
-        const buf = this._queryRead;
-        buf.mapAsync(GPUMapMode.READ).then(
+    // A read-back not in use, or null: then this frame goes without timestamps.
+    _freeRead() {
+        if (!this._querySet) return null;
+        return this._reads.find((r) => !r.busy) || null;
+    }
+
+    // The first @p count timestamps of the set, resolved into @p read's slot
+    // and copied to it.
+    _resolveInto(enc, read, count) {
+        const off = read.slot * RESOLVE_STRIDE;
+        enc.resolveQuerySet(this._querySet, 0, count, this._queryBuf, off);
+        enc.copyBufferToBuffer(this._queryBuf, off, read.buf, 0, count * 8);
+        read.busy = true;
+    }
+
+    // The trace keeps its last TRACE_KEEP records.
+    _keep(rec) {
+        if (this.trace.length >= TRACE_KEEP) this.trace.shift();
+        this.trace.push(rec);
+    }
+
+    // An empty pass, timestamped, then submit → work done: Chrome's own cost
+    // of the round trip (Dawn's GPU process, the fence), with no work in it.
+    _reference() {
+        const rec = { ref: true, t1: 0, t2: null, gpu: null };
+        const enc = this.device.createCommandEncoder();
+        const read = this._freeRead();
+        if (read) {
+            enc.beginComputePass({
+                timestampWrites: {
+                    querySet: this._querySet,
+                    beginningOfPassWriteIndex: 0,
+                    endOfPassWriteIndex: 1,
+                },
+            }).end();
+            this._resolveInto(enc, read, 2);
+        }
+        this.device.queue.submit([enc.finish()]);
+        rec.t1 = performance.now();
+        this._keep(rec);
+        if (read) this._readGpuTimes(read, 2, rec);
+        this.device.queue.onSubmittedWorkDone().then(
             () => {
-                const t = new BigUint64Array(buf.getMappedRange());
-                // Nanoseconds; a pair out of order (a quantized or reset clock) is skipped.
-                if (t[1] > t[0]) this._note('gpuDecode', Number(t[1] - t[0]) / 1e6);
-                if (t[3] > t[2]) this._note('gpuPresent', Number(t[3] - t[2]) / 1e6);
+                rec.t2 = performance.now();
+            },
+            () => {},
+        );
+    }
+
+    _readGpuTimes(read, count, rec = null) {
+        const buf = read.buf;
+        buf.mapAsync(GPUMapMode.READ, 0, count * 8).then(
+            () => {
+                const t = new BigUint64Array(buf.getMappedRange(0, count * 8));
+                if (count === 4) {
+                    // Nanoseconds; a pair out of order (a quantized or reset clock) is skipped.
+                    if (t[1] > t[0]) this._note('gpuDecode', Number(t[1] - t[0]) / 1e6);
+                    if (t[3] > t[2]) this._note('gpuPresent', Number(t[3] - t[2]) / 1e6);
+                }
+                if (rec) rec.gpu = Array.from(t, Number);
                 buf.unmap();
-                this._gpuReading = false;
+                read.busy = false;
             },
             () => {
-                this._gpuReading = false;
+                read.busy = false;
             },
         );
     }

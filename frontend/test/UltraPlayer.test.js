@@ -199,6 +199,73 @@ describe('UltraPlayer', () => {
         expect(p.stats.sliced).toBe(1);
     });
 
+    it('traced: every frame keeps its timeline and GPU times, and an empty reference follows', async () => {
+        vi.stubGlobal(
+            'VideoFrame',
+            class {
+                constructor(src, { timestamp }) {
+                    this.timestamp = timestamp;
+                }
+            },
+        );
+        vi.stubGlobal('GPUMapMode', { READ: 1 });
+        const { PyroWaveDecoder } = await import('../js/stream/ultra/PyroWaveDecoder.js');
+        const { p, frames, done } = player();
+        p.trace = [];
+        p.decoder = new PyroWaveDecoder();
+        p.canvas = {};
+        p.context = {};
+        const passes = [];
+        p.device.createCommandEncoder = () => ({
+            finish: () => ({}),
+            resolveQuerySet() {},
+            copyBufferToBuffer() {},
+            beginComputePass: (d) => {
+                passes.push(d.timestampWrites);
+                return { end() {} };
+            },
+        });
+        p._querySet = {};
+        p._queryBuf = {};
+        // Each read-back answers [1000, 3000, 3500, 4000] ns, or [10, 20] for a reference.
+        const read = (slot) => ({
+            slot,
+            busy: false,
+            buf: {
+                mapAsync: () => Promise.resolve(),
+                getMappedRange: (off, size) =>
+                    new BigUint64Array(size === 32 ? [1000n, 3000n, 3500n, 4000n] : [10n, 20n])
+                        .buffer,
+                unmap() {},
+            },
+        });
+        p._reads = [read(0), read(1)];
+        for (let i = 1; i <= 8; i++) {
+            p.push(new Uint8Array([i]), i, 100 + i);
+            done();
+            for (let k = 0; k < 4; k++) await Promise.resolve();
+        }
+        expect(frames).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+        const kept = p.trace.filter((r) => !r.ref);
+        expect(kept.map((r) => r.host)).toEqual([101, 102, 103, 104, 105, 106, 107, 108]);
+        for (const r of kept) {
+            expect(r.t1).toBeGreaterThanOrEqual(r.t0);
+            expect(r.t2).toBeGreaterThanOrEqual(r.t1);
+            expect(r.t3).toBeGreaterThanOrEqual(r.t2);
+            expect(r.gpu).toEqual([1000, 3000, 3500, 4000]);
+        }
+        // The eighth frame's done ran an empty pass, timestamped.
+        const refs = p.trace.filter((r) => r.ref);
+        expect(refs.length).toBe(1);
+        expect(passes.length).toBe(1);
+        expect(passes[0].beginningOfPassWriteIndex).toBe(0);
+        done();
+        for (let k = 0; k < 4; k++) await Promise.resolve();
+        expect(refs[0].gpu).toEqual([10, 20]);
+        expect(refs[0].t2).toBeGreaterThanOrEqual(refs[0].t1);
+        expect(p.summary().traced).toBe(9);
+    });
+
     it('by slices: a piece missing, and the frame decodes whole', async () => {
         vi.stubGlobal(
             'VideoFrame',
