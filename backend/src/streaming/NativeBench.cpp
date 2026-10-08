@@ -248,6 +248,10 @@ const char* const kUsage =
     "  audioframe=5|10|20  the Opus frame of the host's sound, in ms: 5 the product; 10 or\n"
     "                    20 send a half or a quarter of the packets, and wait that much\n"
     "                    longer before each (plan audio + DSCP, A3 L2)\n"
+    "  clicktrace=0|1    the click's way through the host: each press handed to the OS,\n"
+    "                    each wake-up of the capture with the OS's and the compositor's\n"
+    "                    stamps, a CSV next to the log when the session ends (Windows\n"
+    "                    host; plan attente, A0)\n"
     "the bench's own:\n"
     "  dump=<path>      the encoded stream as it comes out (Annex-B, or OBUs for AV1)\n"
     "  lose=<frames>[x<burst>][k]  every N frames, report the latest one lost (reference\n"
@@ -577,6 +581,10 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
         const int v = value.toInt(&ok);
         ok = ok && (v == 0 || v == 1);
         tuning.relayLog = v == 1;
+    } else if (key == "clicktrace") {
+        const int v = value.toInt(&ok);
+        ok = ok && (v == 0 || v == 1);
+        tuning.clickTrace = v == 1;
     } else if (key == "pace") {
         tuning.paceMultiple = value.toInt(&ok);
         ok = ok && tuning.paceMultiple >= 0 && tuning.paceMultiple <= 50;

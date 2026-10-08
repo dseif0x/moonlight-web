@@ -459,6 +459,7 @@ AcquireStatus WgcCapture::acquire(int timeoutMs, CapturedFrame& frame)
                         ((hundredNs % 10000000) * m_QpcFrequency) / 10000000;
     frame.capturedUs = steadyNowUs();
     frame.presentUs = qpcToMicroseconds(qpc);
+    frame.presentRawUs = frame.presentUs;
 
     // ⚠️ Clamped, and this is not defensive coding — it is a real difference
     // between the two backends.

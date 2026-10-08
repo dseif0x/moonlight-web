@@ -494,6 +494,8 @@ private:
 
     /// The session's stage figures, once, when it ends. Idempotent.
     void logStageSummary();
+    /// The bench's click trace (clicktrace=1), next to this process's log.
+    void writeClickTrace();
 
     /// Turn a borrowed cursor image into a PNG and emit it. Runs on the capture
     /// thread — the pixels do not outlive the call.

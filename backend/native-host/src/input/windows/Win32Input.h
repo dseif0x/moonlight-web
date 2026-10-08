@@ -20,6 +20,7 @@
 #include "../../capture/windows/IWindowsCapture.h"
 #include "../IInputSink.h"
 #include "../RecentreDetector.h"
+#include "../../core/ClickTrace.h"
 #include "VigemGamepad.h"
 
 #include <atomic>
@@ -76,6 +77,11 @@ public:
     void setAllowElevated(bool allow) override;
     void setGateCallback(InputGateCallback callback) override;
     bool releaseBlock() override;
+
+    /// The bench's click trace (clicktrace=1): each mouse button press handed
+    /// to the OS goes into @p trace, which must outlive this sink. Before
+    /// start(), or not at all.
+    void setClickTrace(ClickTrace* trace) { m_ClickTrace = trace; }
 
 private:
     /// The body of releaseBlock, on its own thread — see the .cpp.
@@ -177,6 +183,9 @@ private:
     // worker runs as SYSTEM. An ordinary worker still injects on the caller's
     // thread, on exactly the path that was measured.
     bool m_Follow = false;
+    ClickTrace* m_ClickTrace = nullptr;
+    /// When the last button press was queued for the follower (click trace).
+    std::atomic<int64_t> m_PressQueuedUs{0};
     std::thread m_Follower;
     std::mutex m_QueueMutex;
     std::condition_variable m_QueueWake;

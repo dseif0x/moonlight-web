@@ -697,6 +697,8 @@ void Win32Input::inject(const InputEvent& event)
     // and reaching it means SendInput itself has stopped returning, in which
     // case the newest events are the ones worth keeping.
     constexpr size_t kMaxQueued = 4096;
+    if (m_ClickTrace && event.type == InputEvent::Type::MouseButtonDown)
+        m_PressQueuedUs.store(steadyNowUs(), std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(m_QueueMutex);
         if (m_Queue.size() >= kMaxQueued) {
@@ -1363,7 +1365,14 @@ void Win32Input::injectMouseButton(int button, bool down)
     else
         m_HeldButtons.erase(button);
 
+    if (!m_ClickTrace || !down) {
+        sendMouseButton(button, down);
+        return;
+    }
+    const int64_t startUs = steadyNowUs();
     sendMouseButton(button, down);
+    m_ClickTrace->press(m_Follow ? m_PressQueuedUs.load(std::memory_order_relaxed) : 0, startUs,
+                        steadyNowUs());
 }
 
 void Win32Input::sendMouseButton(int button, bool down)

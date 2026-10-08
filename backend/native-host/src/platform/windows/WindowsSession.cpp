@@ -23,6 +23,7 @@
 #include "../../core/CadenceAlign.h"
 #include "../../core/CadenceChoice.h"
 #include "../../core/CadenceStep.h"
+#include "../../core/ClickTrace.h"
 #include "../../core/CursorPositionGate.h"
 #include "../../core/DeadlineCadence.h"
 #include "../../core/DecodeCredit.h"
@@ -48,6 +49,8 @@
 #include <windows.h>
 // AvSetMmThreadCharacteristicsW: the capture loop runs as an MMCSS "Games" task.
 #include <avrt.h>
+// DwmGetCompositionTimingInfo, for the click trace (clicktrace=1) only.
+#include <dwmapi.h>
 
 #include <atomic>
 #include <chrono>
@@ -101,6 +104,31 @@ int64_t steadyNowUs()
     return std::chrono::duration_cast<std::chrono::microseconds>(
                std::chrono::steady_clock::now().time_since_epoch())
         .count();
+}
+
+/// A QueryPerformanceCounter value on steadyNowUs()'s scale: MSVC's
+/// steady_clock IS the counter, counted from zero. Whole seconds first, so a
+/// long uptime neither overflows nor loses the fraction.
+int64_t qpcToSteadyUs(int64_t qpc)
+{
+    static const int64_t frequency = [] {
+        LARGE_INTEGER f = {};
+        ::QueryPerformanceFrequency(&f);
+        return f.QuadPart > 0 ? f.QuadPart : 1;
+    }();
+    return (qpc / frequency) * 1000000 + ((qpc % frequency) * 1000000) / frequency;
+}
+
+const char* acquireStatusName(capture::AcquireStatus status)
+{
+    switch (status) {
+    case capture::AcquireStatus::Ok: return "ok";
+    case capture::AcquireStatus::Timeout: return "timeout";
+    case capture::AcquireStatus::PointerOnly: return "pointer";
+    case capture::AcquireStatus::Lost: return "lost";
+    case capture::AcquireStatus::Failed: return "failed";
+    }
+    return "";
 }
 
 /// The stamps a picture carries from the capture to the encoder — t₀ to t₂ of
@@ -473,6 +501,7 @@ public:
             if (m_Callbacks.onRumble) m_Callbacks.onRumble(event);
         });
         sink->setAllowElevated(m_Config.allowElevatedInput);
+        if (m_Config.tuning.clickTrace) sink->setClickTrace(&m_ClickTrace);
         std::string inputError;
         if (sink->start(inputError)) {
             std::lock_guard<std::mutex> lock(m_InputMutex);
@@ -607,6 +636,16 @@ public:
         // the same lock as inject(), which is what guards the sink's lifetime.
         std::lock_guard<std::mutex> lock(m_InputMutex);
         return m_Input && m_Input->releaseBlock();
+    }
+
+    std::string clickTraceCsv() const override
+    {
+        if (!m_Config.tuning.clickTrace) return {};
+        if (m_ClickTrace.dropped() > 0)
+            log::warning("[native] click trace: full, " + std::to_string(m_ClickTrace.dropped()) +
+                         " rows past the first " + std::to_string(ClickTrace::kMaxRows) +
+                         " not kept");
+        return m_ClickTrace.csv();
     }
 
     void setCompositeCursor(bool composite, int cursorFramePx) override
@@ -2393,7 +2432,9 @@ private:
             const capture::AcquireStatus status = leaveDda || leaveWgc
                                                       ? capture::AcquireStatus::Lost
                                                       : m_Capture->acquire(acquireTimeoutMs, frame);
-            m_AcquireWaitUs += steadyNowUs() - acquireStartUs;
+            const int64_t acquiredUs = steadyNowUs();
+            m_AcquireWaitUs += acquiredUs - acquireStartUs;
+            if (m_Config.tuning.clickTrace) traceCapture(status, frame, acquireStartUs, acquiredUs);
             if (aimedNow && status != capture::AcquireStatus::Ok) m_DeadlineNothingNew++;
             if (status == capture::AcquireStatus::PointerOnly)
                 m_PointerWakes++;
@@ -2989,6 +3030,43 @@ private:
                   "% of the display) — the CPU encoder sets the latency, so pixels give way "
                   "before frames");
         return true;
+    }
+
+    /// One wake-up of the capture into the click trace (clicktrace=1): what it
+    /// brought, the OS's stamps on it, and DWM's timing read right after —
+    /// its last vblank, its period, its last composition. Capture thread only.
+    void traceCapture(capture::AcquireStatus status, const capture::CapturedFrame& frame,
+                      int64_t startUs, int64_t doneUs)
+    {
+        ClickTrace::Row row;
+        row.kind = ClickTrace::Kind::Capture;
+        row.us = doneUs;
+        row.startUs = startUs;
+        row.status = acquireStatusName(status);
+        if (status == capture::AcquireStatus::Ok) {
+            row.presentUs = frame.presentUs;
+            row.presentRawUs = frame.presentRawUs;
+            row.mouseUs = frame.mouseUs;
+            row.accumulated = frame.accumulated;
+        }
+        // hwnd null: the desktop's own composition, the only form Windows 8.1
+        // and later accept.
+        DWM_TIMING_INFO timing = {};
+        timing.cbSize = sizeof(timing);
+        const HRESULT hr = ::DwmGetCompositionTimingInfo(nullptr, &timing);
+        if (SUCCEEDED(hr)) {
+            row.vblankUs = qpcToSteadyUs(static_cast<int64_t>(timing.qpcVBlank));
+            row.periodUs = qpcToSteadyUs(static_cast<int64_t>(timing.qpcRefreshPeriod));
+            row.composeUs = qpcToSteadyUs(static_cast<int64_t>(timing.qpcCompose));
+            row.composedFrames = static_cast<int64_t>(timing.cFrame);
+        } else if (!m_DwmTimingRefused) {
+            m_DwmTimingRefused = true;
+            char code[16];
+            std::snprintf(code, sizeof(code), "0x%08lX", static_cast<unsigned long>(hr));
+            log::warning(std::string("[native] click trace: DWM gives no composition timing (") +
+                         code + ") — the trace goes without it");
+        }
+        m_ClickTrace.add(row);
     }
 
     /// Tell the client what the pointer looks like, when the client is the one
@@ -3650,6 +3728,11 @@ private:
     /// because it is created and destroyed on the session's thread but used on
     /// the network thread.
     std::mutex m_InputMutex;
+    /// The bench's click trace (clicktrace=1). Ahead of the sink, which writes
+    /// into it: it is destroyed after it.
+    ClickTrace m_ClickTrace;
+    /// DWM refused its timing once: said once, then left out.
+    bool m_DwmTimingRefused = false;
     std::unique_ptr<input::IInputSink> m_Input;
     /// See setInputGateCallback. Kept here so a listener registered before the
     /// sink exists is not lost. Guarded by m_InputMutex.

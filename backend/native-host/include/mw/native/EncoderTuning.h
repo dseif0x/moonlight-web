@@ -435,6 +435,12 @@ struct EncoderTuning
     /// log when the session ends (plan « Wi-Fi : la vidéo qui attend dans
     /// SCTP », W1). false, the product: nothing kept.
     bool relayLog = false;
+    /// The click's way through the host — each press handed to the OS, each
+    /// wake-up of the capture with the OS's and the compositor's own stamps —
+    /// written as a CSV next to the log when the session ends (plan
+    /// « attente », A0; see src/core/ClickTrace.h). false, the product:
+    /// nothing kept.
+    bool clickTrace = false;
     /// The relay hands a frame's chunks to SCTP at this many times the
     /// stream's bitrate at most, paceBurstKb at a time (plan Wi-Fi W2 A:
     /// a frame sent in one run overflows the browser's UDP socket on Wi-Fi).
@@ -524,7 +530,8 @@ struct EncoderTuning
                ultraSynthKb == 0 && !ultraUnordered && ultraMbps == 0 && aroadPace < 0 &&
                aroadWindowKb == 0 && aroadBudgetPct == 0 && !relayLog && paceMultiple == 0 &&
                paceBurstKb == 0 && retransCutPermille < 0 && sctpBufferKb == 0 && linkHoldMs == 0 &&
-               sctpMaxBurst < 0 && sctpScheduler < 0 && !audioLog && audioFrameMs == 0;
+               sctpMaxBurst < 0 && sctpScheduler < 0 && !audioLog && audioFrameMs == 0 &&
+               !clickTrace;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -644,6 +651,7 @@ struct EncoderTuning
         if (sctpScheduler >= 0) add("sctpss=" + std::to_string(sctpScheduler));
         if (audioLog) add("audiolog=1");
         if (audioFrameMs > 0) add("audioframe=" + std::to_string(audioFrameMs));
+        if (clickTrace) add("clicktrace=1");
         return s;
     }
 };

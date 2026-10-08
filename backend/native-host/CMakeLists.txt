@@ -129,9 +129,10 @@ if(WIN32)
          "static const char kPyroWaveEncoderHlsl[] = {${_mw_pyrowave_bytes}0x00};\n")
     target_include_directories(mw-native-host PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
+    # dwmapi: the compositor's timing, read by the bench's click trace only.
     target_link_libraries(mw-native-host PRIVATE dxgi d3d11 d3d12 d3dcompiler user32 gdi32 setupapi
                                                  avrt ole32 oleaut32 runtimeobject mfuuid
-                                                 strmiids)
+                                                 strmiids dwmapi)
 elseif(APPLE)
     set(MW_NATIVE_PLATFORM "macos")
     # ScreenCaptureKit → VideoToolbox, with no conversion stage in between:
@@ -566,6 +567,7 @@ if(MW_BUILD_TESTS)
         tests/test_cadence_step.cpp
         tests/test_decode_credit.cpp
         tests/test_deadline_cadence.cpp
+        tests/test_click_trace.cpp
         tests/test_restart_backoff.cpp
         tests/test_rate_control.cpp
         tests/test_qp_rate_controller.cpp

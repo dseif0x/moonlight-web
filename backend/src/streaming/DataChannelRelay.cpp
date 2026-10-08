@@ -872,6 +872,11 @@ void DataChannelRelay::setLinkBench(const mw::native::EncoderTuning& tuning)
         qWarning() << "[DataChannelRelay] bench frame log on (relaylog=1): each video frame's way "
                       "through the relay, written next to the log when the session ends";
     }
+    if (tuning.clickTrace && !m_ClickTraceLog) {
+        m_ClickTraceLog = true;
+        qWarning() << "[DataChannelRelay] bench click trace on (clicktrace=1): a line for each "
+                      "stamped input, when it came off the channel and when it was handled";
+    }
     if (tuning.audioLog && !m_AudioLog) {
         m_AudioLog = true;
         AudioPathLog::instance().start();
@@ -2235,7 +2240,16 @@ void DataChannelRelay::sendInputStamp(double id, int64_t recvUs)
     reply["type"] = "inputstamp";
     reply["id"] = id;
     reply["recv"] = static_cast<double>(recvUs);
-    reply["done"] = static_cast<double>(steadyUs());
+    const int64_t doneUs = steadyUs();
+    reply["done"] = static_cast<double>(doneUs);
+    // The bench's click trace: the same two stamps on this side, so the host's
+    // own files can date a click's arrival without the client's.
+    if (m_ClickTraceLog)
+        qInfo().noquote() << QStringLiteral("[DataChannelRelay] click trace: input stamp %1 "
+                                            "received at steady %2 us, handled at %3 us")
+                                 .arg(static_cast<qint64>(id))
+                                 .arg(recvUs)
+                                 .arg(doneUs);
     const QByteArray json = QJsonDocument(reply).toJson(QJsonDocument::Compact);
     if (!m_InputDc || m_Stopping.load()) return;
     try {

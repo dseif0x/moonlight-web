@@ -516,6 +516,11 @@ public:
     /// not closed, and where the platform has no such thing — today, everywhere
     /// but Windows.
     virtual bool releaseInputBlock() { return false; }
+
+    /// The bench's click trace (EncoderTuning::clickTrace) as CSV text, empty
+    /// when it was not asked for or the platform has none. The engine writes
+    /// nothing to disk: the consumer puts it next to its log.
+    virtual std::string clickTraceCsv() const { return {}; }
 };
 
 /// Entry point to the engine.

@@ -448,6 +448,11 @@ AcquireStatus DxgiDuplication::acquire(int timeoutMs, CapturedFrame& frame)
     frame.texture = m_AcquiredTexture.Get();
     frame.presentUs = qpcToMicroseconds(info.LastPresentTime.QuadPart);
     frame.capturedUs = steadyNowUs();
+    frame.presentRawUs = frame.presentUs;
+    frame.mouseUs = info.LastMouseUpdateTime.QuadPart != 0
+                        ? qpcToMicroseconds(info.LastMouseUpdateTime.QuadPart)
+                        : 0;
+    frame.accumulated = static_cast<int>(info.AccumulatedFrames);
     return AcquireStatus::Ok;
 }
 

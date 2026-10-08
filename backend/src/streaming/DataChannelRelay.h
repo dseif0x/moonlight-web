@@ -453,6 +453,8 @@ private:
     // packet's way through the host (AudioPathLog.h, process-wide), written
     // next to the log at the end of the session. Set before any packet.
     bool m_AudioLog = false;
+    /// clicktrace=1: a log line per stamped input (see sendInputStamp).
+    bool m_ClickTraceLog = false;
     // `pace=`, `paceburst=` (plan Wi-Fi W2 A): the sender hands a frame's
     // chunks to SCTP at this many times the stream's bitrate, this many KB at
     // a time; chunks no bigger than that run. Set at setup, before any frame.

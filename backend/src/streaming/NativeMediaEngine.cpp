@@ -24,12 +24,18 @@
 #include "InputWatchdog.h"
 #include "NativeBench.h"
 #include "backend/VirtualDisplay.h"
+#include "common/Logger.h"
 
 #include "mw/native/FeedWire.h"
 #include "mw/native/NativeHost.h"
 
 #include <QBuffer>
+#include <QCoreApplication>
+#include <QDateTime>
 #include <QDebug>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QImage>
 #include <QJsonArray>
 
@@ -828,10 +834,30 @@ void NativeMediaEngine::stopConnection()
         m_Hid.reset();
     }
     m_Session->stop();
+    writeClickTrace();
     m_Session.reset();
     m_Publisher = nullptr;
     logStageSummary();
     emit connectionStopped();
+}
+
+void NativeMediaEngine::writeClickTrace()
+{
+    // Like the relay's frame log (relaylog=1): beside this process's log,
+    // where the bench picks it up.
+    const std::string csv = m_Session ? m_Session->clickTraceCsv() : std::string();
+    if (csv.empty()) return;
+    const QString logFile = Logger::instance()->logFilePath();
+    const QString dir = logFile.isEmpty() ? QDir::tempPath() : QFileInfo(logFile).absolutePath();
+    const QString path = dir + QStringLiteral("/click-trace-%1-%2.csv")
+                                   .arg(QCoreApplication::applicationPid())
+                                   .arg(QDateTime::currentMSecsSinceEpoch());
+    QFile file(path);
+    const bool ok =
+        file.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+        file.write(csv.data(), static_cast<qint64>(csv.size())) == static_cast<qint64>(csv.size());
+    qInfo() << "[NativeMediaEngine] click trace" << (ok ? "written to" : "could NOT be written to")
+            << path;
 }
 
 void NativeMediaEngine::interruptConnection()

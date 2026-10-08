@@ -63,6 +63,18 @@ struct CapturedFrame
     /// When acquire() returned. `capturedUs - presentUs` is the capture
     /// latency, and it is the first number worth watching.
     int64_t capturedUs = 0;
+
+    // For the click trace (core/ClickTrace.h), left at 0 / -1 where the
+    // capture cannot tell.
+    /// The OS's own present stamp, before any correction: WGC's runs up to
+    /// ~9 ms ahead of the moment it hands the frame over, and presentUs is
+    /// clamped to capturedUs.
+    int64_t presentRawUs = 0;
+    /// DDA: when the pointer last moved or changed, 0 when this frame says
+    /// nothing of it.
+    int64_t mouseUs = 0;
+    /// DDA: the presents folded into this frame (AccumulatedFrames).
+    int accumulated = -1;
 };
 
 class IWindowsCapture
