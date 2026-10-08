@@ -254,7 +254,9 @@ BOOL CALLBACK addMonitor(HMONITOR monitor, HDC, LPRECT, LPARAM lParam)
     const QStringList skip =
         qEnvironmentVariable("MW_LATENCY_FLAG_SKIP")
             .split(QRegularExpression(QStringLiteral("[;,\\s]+")), Qt::SkipEmptyParts);
-    if (skip.contains(device, Qt::CaseInsensitive)) {
+    // "*": no screen at all — the flag armed, so the probe still runs, and
+    // something else draws it (tools/click-target, plan « attente » A1).
+    if (skip.contains(device, Qt::CaseInsensitive) || skip.contains(QStringLiteral("*"))) {
         qInfo() << "[LatencyFlag] no flag on" << device << "(MW_LATENCY_FLAG_SKIP)";
         return TRUE;
     }

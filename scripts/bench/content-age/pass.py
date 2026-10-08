@@ -20,6 +20,7 @@ it reaches this host at (plan framerate-hote §4).
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -394,6 +395,18 @@ def main():
             w, h = vdd[0][2].split("x")
             os.environ["MW_BENCH_CONTENT_RECT"] = "%s,%s,%s,%s" % (x, y, w, h)
             print("virtual display", " ".join(vdd[0]), flush=True)
+        target = None
+        if a.hold > 0 and a.target == "vdisplay" and os.environ.get("MW_BENCH_CLICK_TARGET"):
+            # Plan « attente » A1: mw-click-target over the virtual display, the
+            # click's ideal game drawing the flag itself (the host's kept off
+            # every screen: MW_LATENCY_FLAG_SKIP=*); its log beside the pass.
+            target = subprocess.Popen(
+                [os.environ["MW_BENCH_CLICK_TARGET"], "--display", vdd[0][0], "--out",
+                 os.path.join(age.OUT, a.tag + ".target.jsonl"), "--duration",
+                 str(int(a.hold) + 300)] + os.environ.get("MW_BENCH_CLICK_TARGET_ARGS", "").split())
+            time.sleep(3)
+            print("  click target on %s: %s" % (vdd[0][0], "running" if target.poll() is None
+                                                  else "exited %s" % target.returncode), flush=True)
         if a.hold > 0:
             # A game on the virtual display instead of the bench page (RE9,
             # driven by a script of its own): the stream held, nothing drawn
@@ -406,6 +419,8 @@ def main():
             # A still screen: the way up with almost no video coming down.
             uplink = uplink_runs(d, a.uplink, a.tag)
             clicks = click_flag(d, a.clicks, tag=a.tag) if a.clicks > 0 else None
+            if target:
+                target.terminate()
             stats = d.stats()
             with open(os.path.join(age.OUT, a.tag + ".json"), "w") as f:
                 json.dump({"tag": a.tag, "overlay": stats, "args": vars(a),

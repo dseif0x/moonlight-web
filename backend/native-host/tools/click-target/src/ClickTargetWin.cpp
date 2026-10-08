@@ -62,8 +62,19 @@ std::string narrow(const wchar_t* w)
 {
     std::string s;
     for (; *w; ++w)
-        s += (*w < 0x80 && *w != '"' && *w != '\\') ? static_cast<char>(*w) : '?';
+        s += *w < 0x80 ? static_cast<char>(*w) : '?';
     return s;
+}
+
+/// @p s as the inside of a JSON string: a GDI name is \\.\DISPLAY5.
+std::string jsonText(const std::string& s)
+{
+    std::string out;
+    for (char c : s) {
+        if (c == '"' || c == '\\') out += '\\';
+        out += c;
+    }
+    return out;
 }
 
 struct Monitor
@@ -449,9 +460,9 @@ int run(const Options& o, Log& log)
     dm.dmSize = sizeof(dm);
     EnumDisplaySettingsW(mon->device.c_str(), ENUM_CURRENT_SETTINGS, &dm);
     log.line("{\"start\":" + std::to_string(steadyNowUs()) + ",\"screen\":\"" +
-             narrow(mon->device.c_str()) + "\",\"size\":\"" + std::to_string(mw) + "x" +
+             jsonText(narrow(mon->device.c_str())) + "\",\"size\":\"" + std::to_string(mw) + "x" +
              std::to_string(mh) + "\",\"hz\":" + std::to_string(dm.dmDisplayFrequency) +
-             ",\"adapter\":\"" + r.adapterName + "\",\"mode\":\"" +
+             ",\"adapter\":\"" + jsonText(r.adapterName) + "\",\"mode\":\"" +
              (o.fullscreen ? "fullscreen" : "window") + "\",\"sync\":" +
              std::to_string(o.syncInterval) + ",\"tearing\":" + (r.tearing ? "true" : "false") +
              ",\"continuous\":" + (o.continuous ? "true" : "false") + ",\"fps\":" +
