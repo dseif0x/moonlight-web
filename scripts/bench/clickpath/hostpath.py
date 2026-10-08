@@ -28,16 +28,20 @@ The legs, in ms:
   present    shown → the present of the frame that showed it (LastPresentTime)
   handoff    that present → the capture handed the frame over
   host       received → handed over: the host's whole share
-and: `vblank` where in DWM's refresh the flag went up (0: at a vblank, 1: just
-before the next), `wait` shown → the next vblank, `between` frames presented
-after the flag went up that did not carry it.
+and: `vblank` where in the captured screen's refresh the flag went up (0: at a
+refresh, 1: just before the next), `wait` shown → its next refresh, `late` how
+many refreshes after that one its frame was presented, `between` frames
+presented after the flag went up that did not carry it. The refresh grid comes
+from the presents themselves: DWM's own timing follows another screen's clock.
 
-Usage: hostpath.py <tag> [<tag>...] [--dir bench-out/content-age] [--target file] [--clicks]
+Usage: hostpath.py <tag> [<tag>...] [--dir bench-out/content-age] [--target file] [--clicks] [--pool]
 """
 import argparse
 import bisect
+import cmath
 import csv
 import json
+import math
 import os
 import re
 import statistics
@@ -49,7 +53,8 @@ FLAG_TRACE = re.compile(r"\[LatencyFlag\] trace: flushed at steady (\d+) us(?:.*
 RELAY = re.compile(r"click trace: input stamp (\d+) received at steady (\d+) us, handled at "
                    r"(\d+) us")
 LEGS = ["queue", "sendinput", "hook", "raise", "composed", "present", "handoff", "host",
-        "vblank", "wait", "between"]
+        "vblank", "wait", "late", "between"]
+RATES = (60, 75, 90, 100, 120, 144, 165, 180, 240, 360, 480, 500)
 
 
 def num(v):
@@ -113,7 +118,7 @@ def client_flag_frames(base):
     """Per click the client measured, the host stamp (ms) of the frame that
     showed the flag, and the click's host time estimated (µs)."""
     if not (os.path.exists(base + ".json") and os.path.exists(base + ".clicks.frames.csv")):
-        return []
+        return [], []
     j = json.load(open(base + ".json"))
     c = j.get("clicks") or {}
     org = c.get("timeOrigin")
@@ -123,11 +128,15 @@ def client_flag_frames(base):
         if r.get("drawnMs") is not None and r.get("hostMs") is not None:
             fr.append(r)
     if not fr or org is None:
-        return []
+        return [], []
     fr.sort(key=lambda r: r["drawnMs"])
     drawn = [r["drawnMs"] for r in fr]
     off = statistics.median(r["hostMs"] - r["captureMs"] for r in fr)
     out = []
+    # The client's stamp is the present less a constant of the session (the
+    # first frame's sub-millisecond, cut off), then truncated to the ms: on
+    # the host's clock, each frame's present lies in [ms + x, ms + x + 1000)
+    # µs, x found below against the trace.
     for s in c.get("samples") or []:
         if not s.get("ok"):
             continue
@@ -136,7 +145,45 @@ def client_flag_frames(base):
         if i < 0:
             continue
         out.append({"frameMs": fr[i]["hostMs"], "clickUs": (ck + off) * 1000})
-    return out
+    return out, [r["hostMs"] for r in fr]
+
+
+def refresh_grid(present):
+    """The captured screen's refresh, from its presents: the rate (of RATES)
+    whose phases gather most, then its period fitted and its phase. DWM's own
+    timing cannot say it: on 08/10/2026 it gave 144 Hz, another screen's clock,
+    while the virtual display presented on a 120 Hz grid."""
+    if len(present) < 100:
+        return None
+    best = None
+    for hz in RATES:
+        per = 1e6 / hz
+        v = sum(cmath.exp(2j * math.pi * (p % per) / per) for p in present) / len(present)
+        if best is None or abs(v) > best[0]:
+            best = (abs(v), per)
+    per = best[1]
+    # The period refined from end to end, the phase from the mean of the phases.
+    n = round((present[-1] - present[0]) / per)
+    if n > 0:
+        cands = [per * (1 + e / 1e4) for e in range(-20, 21)]
+        per = max(cands, key=lambda c: abs(sum(cmath.exp(2j * math.pi * (p % c) / c)
+                                                for p in present[::5])))
+    v = sum(cmath.exp(2j * math.pi * (p % per) / per) for p in present) / len(present)
+    phase = (cmath.phase(v) / (2 * math.pi)) % 1.0 * per
+    return per, phase, abs(v)
+
+
+def stamp_offset(client_ms, present):
+    """x of client_flag_frames, in µs: the least distance from a client stamp to
+    the nearest present at or after it, over the frames the client logged."""
+    best = None
+    for h in client_ms[::7]:
+        j = bisect.bisect_left(present, h * 1000 - 3000)
+        near = [p - h * 1000 for p in present[j:j + 4] if abs(p - h * 1000) < 3000]
+        if near:
+            d = min(near, key=abs)
+            best = d if best is None else min(best, d)
+    return best or 0
 
 
 def one(tag, a):
@@ -150,7 +197,10 @@ def one(tag, a):
     log = base + ".server.log"
     flags = read_target(a.target) if a.target else read_flags(log)
     relay = read_relay(log) if os.path.exists(log) else []
-    seen = sorted(client_flag_frames(base), key=lambda s: s["frameMs"])
+    seen, client_ms = client_flag_frames(base)
+    seen.sort(key=lambda s: s["frameMs"])
+    x = stamp_offset(client_ms, present)
+    grid = refresh_grid(present)
     seen_frames = [s["frameMs"] for s in seen]
 
     rows = []
@@ -175,9 +225,9 @@ def one(tag, a):
         frame = None
         k = bisect.bisect_left(seen_frames, s_us / 1000 - 1)
         if k < len(seen) and seen_frames[k] * 1000 - s_us < 200000:
-            lo = seen_frames[k] * 1000
+            lo = seen_frames[k] * 1000 + x - 50
             j = bisect.bisect_left(present, lo)
-            if j < len(caps) and caps[j]["presentUs"] < lo + 1000:
+            if j < len(caps) and caps[j]["presentUs"] < lo + 1100:
                 frame = caps[j]
         if frame is None and not seen:
             after = fl.get("flushed") or s_us
@@ -203,22 +253,27 @@ def one(tag, a):
             j0 = bisect.bisect_right(present, s_us)
             j1 = bisect.bisect_left(present, frame["presentUs"])
             row["between"] = max(0, j1 - j0)
-        # Where in DWM's refresh the flag went up: from the trace line, else
-        # from the capture row nearest before it.
-        vb, per = fl.get("vblank"), fl.get("period")
-        if not (vb and per):
-            j = bisect.bisect_right(present, s_us) - 1
-            if j >= 0 and caps[j].get("vblankUs") and caps[j].get("periodUs"):
-                vb, per = caps[j]["vblankUs"], caps[j]["periodUs"]
-        if vb and per:
-            phase = ((s_us - vb) % per) / per
+        # Where in the captured screen's refresh the flag went up, how long to
+        # its next refresh, and how many refreshes after that one its frame
+        # was presented (0: the very next).
+        if grid:
+            per, ph, _ = grid
+            phase = ((s_us - ph) % per) / per
             row["vblank"] = phase
             row["wait"] = (1 - phase) * per / 1000
+            if frame:
+                row["late"] = round((frame["presentUs"] - (s_us + (1 - phase) * per)) / per)
         rows.append(row)
 
-    print("%s: %d flags, %d presses, %d frames, %d client clicks" % (
-        tag, len(flags), len(presses), len(caps), len(seen)))
-    if a.clicks:
+    print("%s: %d flags, %d presses, %d frames, %d client clicks (stamp offset %d us)%s" % (
+        tag, len(flags), len(presses), len(caps), len(seen), x,
+        ", refresh %.3f Hz (presents on its grid: %.2f)" % (1e6 / grid[0], grid[2]) if grid else ""))
+    summary(rows, a.clicks)
+    return rows
+
+
+def summary(rows, every=False):
+    if every:
         print("  " + " ".join("%9s" % k for k in LEGS))
         for r in rows:
             print("  " + " ".join("%9s" % fmt(r[k]).strip() for k in LEGS))
@@ -236,9 +291,14 @@ def main():
     ap.add_argument("--dir", default=os.path.join("bench-out", "content-age"))
     ap.add_argument("--target", help="mw-click-target's log, for its clicks instead of the flag's")
     ap.add_argument("--clicks", action="store_true", help="every click, not only the summary")
+    ap.add_argument("--pool", action="store_true", help="all the tags' clicks in one summary too")
     a = ap.parse_args()
+    pooled = []
     for t in a.tags:
-        one(t, a)
+        pooled += one(t, a)
+    if a.pool and len(a.tags) > 1:
+        print("pooled, %d clicks:" % len(pooled))
+        summary(pooled)
 
 
 if __name__ == "__main__":
