@@ -1,0 +1,76 @@
+/* games-operator embedded mode (js/embedded.js): the page is a loader, then
+   the stream, then an end screen. The header, footer and community link of
+   the regular application never show. */
+
+.go-embedded .app-header,
+.go-embedded .app-footer,
+.go-embedded #discord-link,
+.go-embedded .discord-link {
+    display: none !important;
+}
+
+#go-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: var(--surface-0, #05080b);
+}
+
+#go-overlay[hidden] {
+    display: none;
+}
+
+#go-overlay .go-card {
+    width: min(480px, 100%);
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+}
+
+#go-overlay .go-title {
+    margin: 0;
+    font-size: 1.6rem;
+}
+
+#go-overlay .go-status {
+    margin: 0;
+    font-size: 1.05rem;
+    color: var(--text-primary, #e6edf3);
+}
+
+#go-overlay .go-detail {
+    margin: 0;
+    min-height: 1.2em;
+    font-size: 0.9rem;
+    color: var(--text-secondary, #8b98a5);
+    word-break: break-word;
+}
+
+#go-overlay .go-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-top: 6px;
+}
+
+#go-overlay .go-spinner {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, 0.12);
+    border-top-color: var(--accent, #38bdf8);
+    animation: go-spin 0.9s linear infinite;
+}
+
+@keyframes go-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

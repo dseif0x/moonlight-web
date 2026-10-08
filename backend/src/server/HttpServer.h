@@ -318,6 +318,14 @@ private:
     /// in the constructor, never written to disk.
     QString m_AdminKey;
 
+    /// Embedded mode (games-operator): a reverse proxy in front of this server
+    /// authenticates the browser itself and marks each request it forwards
+    /// with `X-MW-Embedded: <MW_EMBEDDED_SECRET>`. Such a request is treated
+    /// like the host machine's own: no PIN, no session, admin writes allowed.
+    /// Empty (the default) disables the mode entirely. See embeddedTrusted().
+    QByteArray m_EmbeddedSecret;
+    bool embeddedTrusted(const QMap<QString, QString>& headers) const;
+
     /// Per-IP abuse mitigation (connection-flood + auth-failure ban). Checked at
     /// accept() time for both HTTP and HTTPS listeners.
     ConnectionGuard m_ConnGuard;

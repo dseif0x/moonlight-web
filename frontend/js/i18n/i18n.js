@@ -14,6 +14,7 @@
  * You should have received a copy of the GNU General Public License along with
  * this program. If not, see <https://www.gnu.org/licenses/>.
  */
+import { url } from '../util/basePath.js';
 
 /**
  * MoonlightWeb — lightweight i18n runtime (no build step / no bundler).
@@ -74,7 +75,7 @@ async function fetchLocale(code) {
     try {
         // Root-absolute: the player page lives at /p/<token>, where a relative
         // path would look for /p/locales/… and come back 404.
-        const res = await fetch(`/locales/${code}.json`, { cache: 'no-cache' });
+        const res = await fetch(url(`/locales/${code}.json`), { cache: 'no-cache' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return await res.json();
     } catch (err) {

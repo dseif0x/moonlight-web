@@ -14,6 +14,7 @@
  * You should have received a copy of the GNU General Public License along with
  * this program. If not, see <https://www.gnu.org/licenses/>.
  */
+import { url } from '../util/basePath.js';
 
 /**
  * The application's end of the rendezvous connection.
@@ -276,7 +277,7 @@ export async function startTunnel(onStage) {
     // same file — so a /v2/ can appear beside it without breaking either.
     let mod;
     try {
-        mod = await import(new URL('/v1/tunnel.js', location.origin).href);
+        mod = await import(new URL(url('/v1/tunnel.js'), location.origin).href);
     } catch {
         return false;
     }

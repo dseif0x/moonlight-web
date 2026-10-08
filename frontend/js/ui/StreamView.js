@@ -123,6 +123,7 @@ import { StreamViewTouch } from './StreamViewTouch.js';
 import { StreamViewFullscreen } from './StreamViewFullscreen.js';
 import { flushClientLog, serverDiag } from '../util/ClientLog.js';
 import { UltraPlayer, ultraPlayerSupported } from '../stream/ultra/UltraPlayer.js';
+import { url } from '../util/basePath.js';
 
 /**
  * Lane name → the i18n key the card already uses for that value. The graph
@@ -1812,7 +1813,7 @@ export class StreamView {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-            const resp = await fetch('/api/health', { signal: controller.signal });
+            const resp = await fetch(url('/api/health'), { signal: controller.signal });
             clearTimeout(timeoutId);
 
             if (resp.ok) {

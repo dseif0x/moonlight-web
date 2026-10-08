@@ -14,6 +14,7 @@
  * You should have received a copy of the GNU General Public License along with
  * this program. If not, see <https://www.gnu.org/licenses/>.
  */
+import { url } from './basePath.js';
 
 /**
  * This page's console, sent to the server's client log while the server is in
@@ -166,7 +167,7 @@ function giveBack(batch) {
 async function checkAuth() {
     if (authed) return true;
     try {
-        const r = await fetch('/api/auth/status', { cache: 'no-store' });
+        const r = await fetch(url('/api/auth/status'), { cache: 'no-store' });
         const s = r.ok ? await r.json() : {};
         authed = s.authenticated === true || s.is_localhost === true;
     } catch {
@@ -240,7 +241,7 @@ async function tick() {
 export async function refreshClientLog() {
     let health = null;
     try {
-        const r = await fetch('/api/health', { cache: 'no-store' });
+        const r = await fetch(url('/api/health'), { cache: 'no-store' });
         if (r.ok) health = await r.json();
     } catch {
         // No answer: the next call decides.

@@ -1,0 +1,59 @@
+# games-operator fork: build and publish the embedded-mode image.
+#
+# Upstream's docker.yml publishes only from its own release pipeline. This
+# fork needs its own image for the games-operator Helm chart, so a `go-v*`
+# tag (or a manual run) builds the same Dockerfile and pushes
+#
+#   ghcr.io/<owner>/moonlight-web:go-<version>   (go-v0.1.0 -> go-0.1.0)
+#   ghcr.io/<owner>/moonlight-web:go-latest
+#
+# amd64 only: the hub runs it next to itself on an x86 node, and a native
+# arm64 build would double a 20-minute C++ build.
+name: games-operator image
+
+on:
+  push:
+    tags: ["go-v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Push the image (otherwise only check that it builds)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - id: ver
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/go-v* ]]; then
+            v="${GITHUB_REF#refs/tags/go-v}"
+          else
+            v="0.0.0-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: ${{ startsWith(github.ref, 'refs/tags/go-v') || inputs.publish == true }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/moonlight-web:go-${{ steps.ver.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/moonlight-web:go-latest
+          build-args: |
+            MW_VERSION=${{ steps.ver.outputs.version }}-go
+          cache-from: type=gha,scope=games-operator
+          cache-to: type=gha,mode=max,scope=games-operator

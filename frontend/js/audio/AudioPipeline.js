@@ -17,6 +17,7 @@
 
 import { IS_IOS } from '../util/BrowserDetect.js';
 import * as iosAudioUnlock from './iosAudioUnlock.js';
+import { url } from '../util/basePath.js';
 
 /**
  * AudioPipeline — manages AudioContext + AudioWorkletNode for streaming audio.
@@ -57,7 +58,7 @@ export class AudioPipeline {
     constructor(options = {}) {
         this.sampleRate = options.sampleRate || 48000;
         this.channels = options.channels || 2;
-        this.workletUrl = options.workletUrl || '/js/audio/audio-processor.js';
+        this.workletUrl = options.workletUrl || url('/js/audio/audio-processor.js');
         // Pitch-preserving time-stretch (WSOLA) in the worklet. On by default;
         // disabled via the server kill switch (settings.json audio_time_stretch).
         this.timeStretch = options.timeStretch !== false;

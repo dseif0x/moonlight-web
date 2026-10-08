@@ -121,6 +121,8 @@ import {
     listInstances,
     rememberInstance,
 } from './util/instances.js';
+import { url, isEmbedded } from './util/basePath.js';
+import { GamesOperator } from './embedded.js';
 
 // ── Global error handler ──────────────────────────────────────────────────────
 window.addEventListener('error', (evt) => {
@@ -287,7 +289,7 @@ const MoonlightApp = {
         if (!pageCameThroughTunnel()) {
             const direct = window.location.pathname.match(/^\/[0-9a-z]{26}\/?$/i);
             const token = new URLSearchParams(window.location.hash.slice(1)).get('t');
-            if (direct && token) history.replaceState(null, '', '/p/' + encodeURIComponent(token));
+            if (direct && token) history.replaceState(null, '', url('/p/' + encodeURIComponent(token)));
         }
         if (window.location.pathname === '/p' || window.location.pathname.startsWith('/p/')) {
             await this._initPlayerMode();
@@ -329,6 +331,16 @@ const MoonlightApp = {
         // ── Auth check: show login if remote and not authenticated ─────────
         const authOk = await this._checkAuth();
         if (!authOk) return; // LoginView handles rendering, stop here
+
+        // ── games-operator embedded mode ───────────────────────────────────
+        // Mounted below a prefix by the hub, opened as /play/#app=<id>: no
+        // setup wizard, no nav buttons, no host list. The router still runs so
+        // the stream's history guard pops back to our end screen (_renderHosts).
+        if (isEmbedded() && GamesOperator.detect()) {
+            this._initRouter();
+            GamesOperator.start(this);
+            return;
+        }
         this._offerHomeScreenHandoff();
 
         // ── First-run setup wizard (localhost only) ────────────────────────
@@ -659,7 +671,7 @@ const MoonlightApp = {
             mainState = { view: 'hosts' };
         }
 
-        history.replaceState(mainState, '', initialOverlay === 'admin' ? '/admin' : '/');
+        history.replaceState(mainState, '', url(initialOverlay === 'admin' ? '/admin' : '/'));
 
         this._nav.mainView = mainView;
         this._nav.mainState = mainState;
@@ -702,8 +714,8 @@ const MoonlightApp = {
         this._renderHosts(main);
 
         // Fix URL if an overlay left it at /admin or /settings.
-        if (window.location.pathname === '/admin' || window.location.pathname === '/settings') {
-            history.replaceState({ view: 'hosts' }, '', '/');
+        if (window.location.pathname === url('/admin') || window.location.pathname === url('/settings')) {
+            history.replaceState({ view: 'hosts' }, '', url('/'));
         }
     },
 
@@ -722,6 +734,13 @@ const MoonlightApp = {
     _renderHosts(main) {
         this.transition('host_list');
         this._updateNavHighlight('hosts');
+
+        // games-operator: the hub is the host list. After a stream, offer to
+        // play again or to go back; before the first one the loader is up.
+        if (GamesOperator.isActive()) {
+            GamesOperator.renderEnd(main);
+            return;
+        }
 
         // Streaming needs a trusted TLS origin: the signaling WebSocket is wss://,
         // which a plain-HTTP page can't open against the self-signed localhost
@@ -1068,11 +1087,11 @@ const MoonlightApp = {
             hostDisplayName: this._nav.mainState.hostDisplayName,
         };
 
-        const url = '/' + type;
+        const overlayUrl = url('/' + type);
         if (switching) {
-            history.replaceState(guardState, '', url);
+            history.replaceState(guardState, '', overlayUrl);
         } else {
-            history.pushState(guardState, '', url);
+            history.pushState(guardState, '', overlayUrl);
         }
 
         if (type === 'admin') {
@@ -1354,7 +1373,7 @@ const MoonlightApp = {
             instances,
         );
         try {
-            const fresh = await fetch(`/api/app/web-manifest?t=${Date.now()}`, {
+            const fresh = await fetch(url(`/api/app/web-manifest?t=${Date.now()}`), {
                 cache: 'no-store',
             });
             if (!fresh.ok) return;
@@ -1364,7 +1383,7 @@ const MoonlightApp = {
             // matches a request for /manifest.webmanifest against (sw.js).
             const shell = await caches.open(SHELL_CACHE);
             await shell.put(
-                '/manifest.webmanifest',
+                url('/manifest.webmanifest'),
                 new Response(JSON.stringify(manifest), {
                     headers: { 'Content-Type': 'application/manifest+json' },
                 }),
@@ -1373,7 +1392,7 @@ const MoonlightApp = {
             return; // the shortcut asks for the PIN, as before
         }
         const link = document.querySelector('link[rel="manifest"]');
-        if (link) link.setAttribute('href', `/manifest.webmanifest?t=${Date.now()}`);
+        if (link) link.setAttribute('href', url(`/manifest.webmanifest?t=${Date.now()}`));
     },
 
     /** Whether this page IS an installed shortcut rather than a browser tab. */
@@ -1741,7 +1760,7 @@ const MoonlightApp = {
 
     showHostList() {
         this._closeOverlay();
-        history.pushState({ view: 'hosts' }, '', '/');
+        history.pushState({ view: 'hosts' }, '', url('/'));
         this._setMainView('hosts', {});
     },
 
@@ -3316,9 +3335,9 @@ const MoonlightApp = {
      * use it and succeed), so reuse it verbatim.
      */
     _streamWsUrl(rawUrl) {
-        let path = '/ws';
+        let path = url('/ws');
         try {
-            if (rawUrl) path = new URL(rawUrl, window.location.href).pathname || '/ws';
+            if (rawUrl) path = url(new URL(rawUrl, window.location.href).pathname || '/ws');
         } catch (e) {
             console.warn('[MW] Could not parse signaling URL, defaulting to /ws:', rawUrl, e);
         }
@@ -3630,7 +3649,7 @@ const MoonlightApp = {
             history.back();
         } else {
             this._renderMainView();
-            history.replaceState({ view: 'hosts' }, '', '/');
+            history.replaceState({ view: 'hosts' }, '', url('/'));
         }
     },
 
@@ -4349,7 +4368,7 @@ const MoonlightApp = {
                     history.back();
                 } else {
                     this._renderMainView();
-                    history.replaceState({ view: 'hosts' }, '', '/');
+                    history.replaceState({ view: 'hosts' }, '', url('/'));
                 }
                 Toast.error(t('launch.hevcH264Unsupported'));
                 return;
@@ -4420,7 +4439,7 @@ const MoonlightApp = {
             // Guard already consumed (e.g. user pressed Back before pressing
             // Stop). Render the hosts view directly.
             this._renderMainView();
-            history.replaceState({ view: 'hosts' }, '', '/');
+            history.replaceState({ view: 'hosts' }, '', url('/'));
         }
     },
 

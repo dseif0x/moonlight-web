@@ -48,6 +48,7 @@
  * the way in, the cache's stamp is compared with the host's manifest first.
  */
 import { bootstrapAddress, pageCameThroughTunnel, tunnelHostId } from '../net/tunnelBridge.js';
+import { url } from './basePath.js';
 
 /** Written by the entry page (bootstrap/v1/boot.js) when it fills the cache. */
 const SHELL_STAMP_KEY = 'mw-shell-stamp';
@@ -165,7 +166,7 @@ export const VersionGuard = {
 
     async _fetchManifestVersion() {
         try {
-            const r = await fetch('/api/app/manifest', { cache: 'no-store' });
+            const r = await fetch(url('/api/app/manifest'), { cache: 'no-store' });
             if (!r.ok) return null;
             return (await r.json()).version || null;
         } catch (_) {
@@ -176,7 +177,7 @@ export const VersionGuard = {
     async _fetch() {
         try {
             // no-store + cache-bust query: belt-and-suspenders against iOS WebKit.
-            const r = await fetch('/version.json?_=' + Date.now(), { cache: 'no-store' });
+            const r = await fetch(url('/version.json?_=' + Date.now()), { cache: 'no-store' });
             if (!r.ok) return null;
             return (await r.json()).version || null;
         } catch (_) {

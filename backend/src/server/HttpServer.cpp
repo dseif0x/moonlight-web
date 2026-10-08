@@ -310,6 +310,11 @@ HttpServer::HttpServer(quint16 httpPort, quint16 httpsPort, QObject* parent)
     , m_HttpPort(httpPort)
     , m_HttpsPort(httpsPort)
 {
+    // games-operator embedded mode, see m_EmbeddedSecret.
+    m_EmbeddedSecret = qgetenv("MW_EMBEDDED_SECRET").trimmed();
+    if (!m_EmbeddedSecret.isEmpty())
+        Logger::info(QStringLiteral("[HttpServer] Embedded mode: requests carrying the "
+                                    "X-MW-Embedded secret are trusted as the host machine"));
     // Try compile-time frontend path first (development), fall back to
     // executable-relative path (deployment / MSI install), then to the macOS
     // app-bundle Resources dir. On macOS the frontend cannot live next to the
@@ -845,6 +850,14 @@ bool HttpServer::isAuthenticated(const HttpRequest& req) const
     return !token.isEmpty() && m_AuthManager->validateSession(token);
 }
 
+bool HttpServer::embeddedTrusted(const QMap<QString, QString>& headers) const
+{
+    if (m_EmbeddedSecret.isEmpty()) return false;
+    const QString given = headers.value(QStringLiteral("x-mw-embedded"));
+    if (given.isEmpty()) return false;
+    return AuthManager::constantTimeEquals(given, QString::fromUtf8(m_EmbeddedSecret));
+}
+
 bool HttpServer::adminKeyMatches(const HttpRequest& req) const
 {
     const QByteArray given = req.headers.value(QStringLiteral("x-mw-admin-key")).toUtf8();
@@ -1153,6 +1166,9 @@ void HttpServer::serveRequest(HttpRequest req, Arrival arrival, ResponseCallback
 
     const bool peerLocal = !viaTunnel && isLocalRequest(req.clientAddress);
     const QString sessionToken = sessionTokenFromRequest(req);
+    // Embedded mode: the proxy in front of us already authenticated the
+    // browser. Never on the tunnel, which no proxy sits on.
+    const bool embedded = !viaTunnel && embeddedTrusted(req.headers);
 
     // The single exception, computed once so the two lines below cannot drift
     // apart: a host session that was itself created on this path, by redeeming
@@ -1163,7 +1179,8 @@ void HttpServer::serveRequest(HttpRequest req, Arrival arrival, ResponseCallback
     RequestGuard::Context ctx;
     ctx.peerLocal = peerLocal;
     ctx.hostSession =
-        m_AuthManager && m_AuthManager->isHostSession(sessionToken) && (!viaTunnel || tunnelHost);
+        embedded ||
+        (m_AuthManager && m_AuthManager->isHostSession(sessionToken) && (!viaTunnel || tunnelHost));
     ctx.adminSession = m_AuthManager && m_AuthManager->isAdminSession(sessionToken);
     // The admin key has to follow the two sessions that carry admin rights
     // through the tunnel, or they would be read-only: admin WRITES require it,
@@ -1173,7 +1190,8 @@ void HttpServer::serveRequest(HttpRequest req, Arrival arrival, ResponseCallback
     // unreadable to a cross-origin page either way. What it is not, and never
     // was, is a second proof of location: adminSession is only ever set by the
     // password unlock, which judged that on the ICE address before promoting.
-    ctx.adminKeyOk = (!viaTunnel || tunnelHost || ctx.adminSession) && adminKeyMatches(req);
+    ctx.adminKeyOk =
+        embedded || ((!viaTunnel || tunnelHost || ctx.adminSession) && adminKeyMatches(req));
     ctx.publicDomain = m_Certs.domain();
     ctx.adminLocked = m_AdminLocked;
 
@@ -1364,7 +1382,7 @@ void HttpServer::serveRequest(HttpRequest req, Arrival arrival, ResponseCallback
     // /api/share/player/* is the one other public surface: a player has no
     // MoonlightWeb session and never gets one — those routes authenticate the
     // device from its own mw_player cookie and report their own failures.
-    if (m_AuthManager && !localPrivilege && req.path != "/api/health" &&
+    if (m_AuthManager && !localPrivilege && !embedded && req.path != "/api/health" &&
         req.path != "/api/server/hostname" && !req.path.startsWith("/api/auth/") &&
         !req.path.startsWith("/api/share/player/") && !isAuthenticated(req)) {
         // Unauthenticated remote API hit = credential scanning; feed the guard
@@ -1467,8 +1485,9 @@ void HttpServer::handleWebSocketUpgrade(QTcpSocket* clientSocket, const QByteArr
     // A player's slot is the exception: those callers have no MoonlightWeb
     // session and never will, so the mw_player cookie bound to that slot's
     // activation is what opens it — and nothing else, not even a local peer.
-    const bool localPrivilege = HttpServer::isLocalRequest(peerAddr) &&
-                                RequestGuard::isLocalHostName(up.headers.value("host"));
+    const bool localPrivilege = (HttpServer::isLocalRequest(peerAddr) &&
+                                 RequestGuard::isLocalHostName(up.headers.value("host"))) ||
+                                embeddedTrusted(up.headers);
     if (playerSlot) {
         if (!m_PlayerSlotAuth || !m_PlayerSlotAuth(up, wsSlot)) {
             m_ConnGuard.reportAuthFailure(peerAddr);
