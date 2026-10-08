@@ -112,6 +112,7 @@
 #include "streaming/WorkerService.h"
 #include "streaming/worker/StreamWorkerMain.h"
 #include "network/InternetAccessManager.h"
+#include "network/MdnsAdvertiser.h"
 #include "network/RendezvousClient.h"
 #include "network/RouterPortAllocator.h"
 #include "network/RouterPortPools.h"
@@ -5538,6 +5539,14 @@ int main(int argc, char* argv[])
     // Tell the manager which ports the server actually listens on, so its
     // hairpin test probes the right one.
     internetAccess.setPorts(server.httpPort(), server.activeHttpsPort());
+
+    // Announce this server on the LAN (_moonlightweb._tcp), so the TV app finds
+    // it without typing an address. Through the OS's own mDNS responder: binding
+    // UDP 5353 ourselves for good is what ComputerManager avoids.
+    MdnsAdvertiser mdnsAdvertiser;
+    mdnsAdvertiser.start(
+        MdnsAdvertiser::instanceName(QSysInfo::machineHostName(), mw::edition::isDev()),
+        server.activeHttpsPort());
 
     // URL for the host machine's own entry points (Desktop shortcut, installer
     // post-install page, Dock, tray, startup open).

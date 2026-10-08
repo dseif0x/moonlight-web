@@ -91,6 +91,7 @@ add_executable(run_tests
     test_keyboard_layout.cpp
     test_native_capabilities_json.cpp
     test_edition.cpp
+    test_mdns_advertiser.cpp
     test_router_port_core.cpp
     test_logger_rotation.cpp
     test_control_channel.cpp
@@ -103,6 +104,7 @@ add_executable(run_tests
     # Which MoonlightWeb this is: the names, ports and version a DEV build
     # must answer to so it can sit beside a production install.
     ${_src}/src/common/Edition.cpp
+    ${_src}/src/network/MdnsAdvertiser.cpp
     # The probe result as it crosses from the console session to the service.
     # Capabilities.cpp is the engine's plain-C++ enum/lookup file: no Windows
     # header, no D3D, so it comes along on any platform.

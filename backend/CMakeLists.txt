@@ -253,6 +253,7 @@ add_executable(mw-server
     src/network/SessionMetrics.cpp
     src/network/UpdateChecker.cpp
     src/network/SelfUpdater.cpp
+    src/network/MdnsAdvertiser.cpp
     src/TrayManager.cpp
     src/Autostart.cpp
     src/DisplaySleep.cpp
