@@ -1790,16 +1790,28 @@ void DataChannelRelay::onInputMessage(const std::string& message, int64_t recvUs
     // is answered once handled, whatever its type: when it arrived, and, by the
     // reply's own time, when its handling (the injection) ended. Measurement
     // only — nothing else sends a stamp, and the input itself is unchanged.
+    //
+    // Built in place and never copied: until 08/10/2026 it was emplaced from a
+    // temporary, whose destructor answered at once — "handled" 40 µs after it
+    // arrived, before the injection had even begun — and the client, keeping
+    // the first answer, read ~0 ms of injection where SendInput took 8.
     struct StampReply
     {
+        StampReply(DataChannelRelay* r, double i, int64_t u)
+            : relay(r)
+            , id(i)
+            , recvUs(u)
+        {}
+        StampReply(const StampReply&) = delete;
+        StampReply& operator=(const StampReply&) = delete;
+        ~StampReply() { relay->sendInputStamp(id, recvUs); }
         DataChannelRelay* relay;
         double id;
         int64_t recvUs;
-        ~StampReply() { relay->sendInputStamp(id, recvUs); }
     };
     std::optional<StampReply> stampReply;
     if (const QJsonValue stamp = msg.value(QStringLiteral("stamp")); stamp.isDouble())
-        stampReply.emplace(StampReply{this, stamp.toDouble(), recvUs > 0 ? recvUs : steadyUs()});
+        stampReply.emplace(this, stamp.toDouble(), recvUs > 0 ? recvUs : steadyUs());
 
     if (type == "cursormode") {
         // Who draws the mouse pointer. In desktop mode the browser draws its
