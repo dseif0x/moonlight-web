@@ -646,6 +646,8 @@ option(MW_BUILD_TOOLS "Build the native host's lab tools (scaler bench, mouse pr
 if(MW_BUILD_TOOLS AND WIN32)
     add_subdirectory(tools/scaler-bench)
     add_subdirectory(tools/d3d12-lab)
+    # Plan « attente »: the ideal game, the click drawn and presented at once.
+    add_subdirectory(tools/click-target)
 endif()
 if(MW_BUILD_TOOLS AND APPLE)
     add_subdirectory(tools/mouse-accel-probe)
