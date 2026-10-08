@@ -483,6 +483,8 @@ def remote_matrix(client, series, prefix, extra, udp):
     n = HOST.fetch_log(offset, os.path.join(CA_OUT, tag + ".server.log"))
     relay = HOST.fetch_relay_csv(since, os.path.join(CA_OUT, tag + ".relay.csv"))
     log(HOST.tag, "log %d bytes, relay log %s" % (n, "fetched" if relay else "none"))
+    if HOST.fetch_click_trace(since, os.path.join(CA_OUT, tag + ".click-trace.csv")):
+        log(HOST.tag, "click trace fetched")
     with open(path, encoding="utf-8", errors="replace") as f:
         text = f.read()
     alerts = [l.strip() for l in text.splitlines()

@@ -103,10 +103,18 @@ class RemoteHost:
     def fetch_relay_csv(self, since_epoch, dest):
         """The relay's frame log of the pass (relay-frames-<pid>-<ms>.csv, next to
         the log), the newest written after @p since_epoch, into @p dest."""
+        return self._fetch_newest("relay-frames-", since_epoch, dest)
+
+    def fetch_click_trace(self, since_epoch, dest):
+        """The host's click trace of the pass (clicktrace=1, plan « attente » A0:
+        click-trace-<pid>-<ms>.csv, next to the log), as fetch_relay_csv."""
+        return self._fetch_newest("click-trace-", since_epoch, dest)
+
+    def _fetch_newest(self, prefix, since_epoch, dest):
         folder = os.path.dirname(self.log_path())
-        name = self.sh("cd %s && ls -t relay-frames-*.csv 2>/dev/null | head -1" %
-                       shlex.quote(folder)).strip()
-        if not name.startswith("relay-frames-"):
+        name = self.sh("cd %s && ls -t %s*.csv 2>/dev/null | head -1" %
+                       (shlex.quote(folder), prefix)).strip()
+        if not name.startswith(prefix):
             return False
         try:
             ms = int(name.rsplit("-", 1)[1].split(".")[0])

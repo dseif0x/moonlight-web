@@ -108,6 +108,13 @@ def host_lines(tag, since):
     if frames:
         shutil.copyfile(max(frames, key=os.path.getmtime), os.path.join(OUT, tag + ".relay.csv"))
         print("    relay frame log:", tag + ".relay.csv", flush=True)
+    # The host's click trace (`clicktrace=1`, plan « attente » A0): the same.
+    traces = [p for p in glob.glob(os.path.join(WORKER_LOGS, "click-trace-*.csv"))
+              if os.path.getmtime(p) >= since]
+    if traces:
+        shutil.copyfile(max(traces, key=os.path.getmtime),
+                        os.path.join(OUT, tag + ".click-trace.csv"))
+        print("    click trace:", tag + ".click-trace.csv", flush=True)
     for l in lines:
         if any(k in l for k in ("cadence:", "cadence step", "decode credit", "deadline:")):
             print("   ", l[l.find("[native]"):][:240], flush=True)
