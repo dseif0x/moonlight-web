@@ -33,6 +33,9 @@ const char* kUsage =
     "  --on-click           draw only when the flag changes (default: continuously)\n"
     "  --fps <n>            continuous frames a second at most, 0 none (default 240)\n"
     "  --react frame        a click waits for the next frame due (default: at once)\n"
+    "  --input-first        read the input before waiting for the swap chain, as a\n"
+    "                       simple loop does (default: after, as a game tuned for\n"
+    "                       latency does)\n"
     "  --adapter <name>     the GPU, by a piece of its name, or warp (default: the\n"
     "                       screen's own)\n"
     "  --duration <s>       quit after that long, 1-7200 (default 600; Escape sooner)\n"
@@ -75,6 +78,8 @@ int main(int argc, char** argv)
             const std::string v = argv[++i];
             ok = v == "frame" || v == "now";
             o.reactAtOnce = v == "now";
+        } else if (a == "--input-first") {
+            o.inputAfterWait = false;
         } else if (a == "--adapter" && next) {
             o.adapter = argv[++i];
         } else if (a == "--duration" && next) {

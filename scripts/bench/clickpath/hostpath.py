@@ -201,6 +201,13 @@ def one(tag, a):
     seen.sort(key=lambda s: s["frameMs"])
     x = stamp_offset(client_ms, present)
     grid = refresh_grid(present)
+    loose = None
+    if grid and grid[2] < 0.5:
+        # Presents on no grid: on 08/10/2026 an application drawing at 240 fps
+        # on the virtual display had its frames handed over every ~7 ms, give
+        # or take half a millisecond, on no refresh of the screen's own. There
+        # is then no refresh to place the flag in.
+        loose, grid = grid, None
     seen_frames = [s["frameMs"] for s in seen]
 
     rows = []
@@ -265,9 +272,18 @@ def one(tag, a):
                 row["late"] = round((frame["presentUs"] - (s_us + (1 - phase) * per)) / per)
         rows.append(row)
 
+    gaps = sorted(b - a for a, b in zip(present, present[1:]) if b > a)
+    if grid:
+        where = ", refresh %.3f Hz (presents on its grid: %.2f)" % (1e6 / grid[0], grid[2])
+    elif loose and gaps:
+        where = (", presents on no refresh grid (%.1f a second, median gap %.2f ms; the best"
+                 " grid, %.0f Hz, holds %.2f)" % (
+                     len(present) * 1e6 / (present[-1] - present[0]), gaps[len(gaps) // 2] / 1000,
+                     1e6 / loose[0], loose[2]))
+    else:
+        where = ""
     print("%s: %d flags, %d presses, %d frames, %d client clicks (stamp offset %d us)%s" % (
-        tag, len(flags), len(presses), len(caps), len(seen), x,
-        ", refresh %.3f Hz (presents on its grid: %.2f)" % (1e6 / grid[0], grid[2]) if grid else ""))
+        tag, len(flags), len(presses), len(caps), len(seen), x, where))
     summary(rows, a.clicks)
     return rows
 

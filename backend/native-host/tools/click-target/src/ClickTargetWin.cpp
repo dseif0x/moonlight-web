@@ -446,6 +446,23 @@ int run(const Options& o, Log& log)
     }
     SetForegroundWindow(state.hwnd);
 
+    // The probe clicks wherever the host's cursor is and never moves it: put
+    // the cursor on the window, and back whenever something takes it away (a
+    // screen that comes or goes moves it). Without this, two passes on 08/10
+    // ran with every click landing on another screen: 60 sent, none received.
+    RECT windowRect = {};
+    GetWindowRect(state.hwnd, &windowRect);
+    auto keepCursor = [&](const char* why) {
+        POINT p = {};
+        if (GetCursorPos(&p) && PtInRect(&windowRect, p)) return;
+        SetCursorPos((windowRect.left + windowRect.right) / 2,
+                     (windowRect.top + windowRect.bottom) / 2);
+        log.line("{\"cursor\":\"" + std::string(why) +
+                 "\",\"at\":" + std::to_string(steadyNowUs()) + ",\"was\":\"" +
+                 std::to_string(p.x) + "," + std::to_string(p.y) + "\"}");
+    };
+    keepCursor("placed");
+
     Renderer r;
     if (!r.init(state.hwnd, o, mon->device, ww, wh)) {
         std::fprintf(stderr, "mw-click-target: %s\n", r.error.c_str());
@@ -466,7 +483,8 @@ int run(const Options& o, Log& log)
              (o.fullscreen ? "fullscreen" : "window") + "\",\"sync\":" +
              std::to_string(o.syncInterval) + ",\"tearing\":" + (r.tearing ? "true" : "false") +
              ",\"continuous\":" + (o.continuous ? "true" : "false") + ",\"fps\":" +
-             std::to_string(o.fps) + ",\"react\":\"" + (o.reactAtOnce ? "now" : "frame") + "\"}");
+             std::to_string(o.fps) + ",\"react\":\"" + (o.reactAtOnce ? "now" : "frame") +
+             "\",\"input\":\"" + (o.inputAfterWait ? "after-wait" : "first") + "\"}");
 
     HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
                                           TIMER_ALL_ACCESS);
@@ -476,11 +494,24 @@ int run(const Options& o, Log& log)
     bool flagShown = false;
     int64_t lastStatsUs = steadyNowUs();
     uint64_t lastStatsFrames = 0;
+    int64_t lastCursorUs = steadyNowUs();
 
+    auto pump = [] {
+        MSG msg;
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    };
     auto drawNow = [&](int64_t now) {
         // The swap chain lets a frame go once the last is queued: a game
-        // waits here, never on the GPU.
+        // waits here, never on the GPU. With --sync 1 that is up to a refresh;
+        // a click that came meanwhile is read now, before the frame is drawn.
         WaitForSingleObject(r.waitable(), 100);
+        if (o.inputAfterWait) {
+            pump();
+            now = steadyNowUs();
+        }
         const bool up = now < state.flagUntilUs;
         const int64_t renderUs = steadyNowUs();
         int64_t callUs = 0, doneUs = 0;
@@ -502,11 +533,7 @@ int run(const Options& o, Log& log)
 
     while (!state.quit && steadyNowUs() < endUs) {
         // Input first, at once, whatever the swap chain is doing.
-        MSG msg;
-        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
+        pump();
         const int64_t now = steadyNowUs();
         const bool flagChanged = (now < state.flagUntilUs) != flagShown;
         const bool due = o.continuous && now >= nextFrameUs;
@@ -534,6 +561,11 @@ int run(const Options& o, Log& log)
         while (!state.pending.empty() && now - state.pending.front().downUs > 1000000) {
             log.line(clickJson(state.pending.front(), 0, "unknown"));
             state.pending.pop_front();
+        }
+
+        if (now - lastCursorUs >= 250000) {
+            keepCursor("brought back");
+            lastCursorUs = now;
         }
 
         if (now - lastStatsUs >= 5000000) {

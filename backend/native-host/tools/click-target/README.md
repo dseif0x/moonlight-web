@@ -32,6 +32,10 @@ parks the pointer on.
 --on-click           draw only when the flag changes; default: continuously
 --fps <n>            continuous frames a second at most, 0 none (default 240)
 --react frame        a click waits for the next frame due; default: at once
+--input-first        read the input before waiting for the swap chain, as a
+                     simple loop does; default: after, as a game tuned for
+                     latency does (with --sync 1 the click then waits a frame
+                     less: 08/10, 6 ms before it was seen, then the wait)
 --adapter <name>     the GPU, by a piece of its name, or warp; default: the
                      screen's own
 --duration <s>       quit after that long, 1-7200 (default 600); Escape sooner
@@ -58,9 +62,12 @@ API does not say: run PresentMon beside it for that.
 
 - The host's flag must not cover it: keep `latency_flag_enabled` on (the probe
   needs it), but tell the flag to stay off that screen with
-  `MW_LATENCY_FLAG_SKIP=\\.\DISPLAYn` in the server's environment.
+  `MW_LATENCY_FLAG_SKIP=\\.\DISPLAYn` in the server's environment, or `*` for
+  every screen (the virtual display's name changes each time it is made).
 - The host's pointer must be over the window: an injected click goes to the
-  window under it.
+  window under it, and the probe never moves it. The tool puts it there at
+  start and brings it back every 250 ms if something took it away (a log
+  line `{"cursor": "placed" | "brought back", "was": "x,y"}` each time).
 - `scripts/bench/clickpath/hostpath.py <tag> --target <log>` splits the click
   with it (see that folder's README).
 

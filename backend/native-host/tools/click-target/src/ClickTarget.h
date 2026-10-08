@@ -61,6 +61,10 @@ struct Options
     /// A click is drawn at once (the ideal game), or at the next frame due
     /// (a game that samples its input once per frame).
     bool reactAtOnce = true;
+    /// Read the input once the swap chain lets the next frame go, as a game
+    /// tuned for latency does; or before waiting for it, as a simple loop
+    /// does (with --sync 1, a click then waits a frame before it is seen).
+    bool inputAfterWait = true;
     /// The GPU, by a piece of its name; empty: the one driving the screen,
     /// else the first. "warp": the software rasterizer.
     std::string adapter;
