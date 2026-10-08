@@ -853,9 +853,19 @@ bool HttpServer::isAuthenticated(const HttpRequest& req) const
 bool HttpServer::embeddedTrusted(const QMap<QString, QString>& headers) const
 {
     if (m_EmbeddedSecret.isEmpty()) return false;
-    const QString given = headers.value(QStringLiteral("x-mw-embedded"));
+    const QByteArray given = headers.value(QStringLiteral("x-mw-embedded")).toUtf8();
     if (given.isEmpty()) return false;
-    return AuthManager::constantTimeEquals(given, QString::fromUtf8(m_EmbeddedSecret));
+    // Constant-time, as adminKeyMatches(): the length difference folds into
+    // the accumulator so the time never depends on where a mismatch is.
+    const QByteArray& expected = m_EmbeddedSecret;
+    const int n = qMax(given.size(), expected.size());
+    quint8 diff = static_cast<quint8>(given.size() ^ expected.size());
+    for (int i = 0; i < n; ++i) {
+        const quint8 a = i < given.size() ? static_cast<quint8>(given[i]) : 0;
+        const quint8 b = i < expected.size() ? static_cast<quint8>(expected[i]) : 0;
+        diff |= static_cast<quint8>(a ^ b);
+    }
+    return diff == 0;
 }
 
 bool HttpServer::adminKeyMatches(const HttpRequest& req) const
