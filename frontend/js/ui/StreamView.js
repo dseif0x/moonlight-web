@@ -4089,8 +4089,12 @@ export class StreamView {
      */
     _mountShareMenu() {
         if (this._playerMode || this._shareMenu || !this._rootEl) return;
-        // games-operator embedded mode: no host list, no sharing board.
-        if (isEmbedded()) return;
+        // games-operator embedded mode: no host list, no sharing board; the
+        // player settings take the Share button's place.
+        if (isEmbedded()) {
+            this._mountSettingsButton();
+            return;
+        }
         const header = /** @type {HTMLElement} */ (this._rootEl.querySelector('.stream-header'));
         const quitBtn = /** @type {HTMLElement} */ (this._rootEl.querySelector('#btn-stream-quit'));
         if (!header || !quitBtn) return;
@@ -4108,6 +4112,34 @@ export class StreamView {
         menu.mount().then((mounted) => {
             if (!mounted && this._shareMenu === menu) this._shareMenu = null;
         });
+    }
+
+    /**
+     * games-operator embedded mode: a Settings button next to Stop, where the
+     * Share menu is for a regular host. Settings cannot open over a running
+     * stream (see app._openOverlay), so the button disconnects the same way
+     * Stop does — the app keeps running on the host — and embedded.js opens
+     * the settings page once the stream is gone, with Play again on it.
+     * Idempotent.
+     */
+    _mountSettingsButton() {
+        if (this._settingsBtn || !this._rootEl) return;
+        const header = this._rootEl.querySelector('.stream-header');
+        const quitBtn = this._rootEl.querySelector('#btn-stream-quit');
+        if (!header || !quitBtn) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.id = 'btn-stream-settings';
+        btn.className = 'btn btn-secondary stream-settings-btn';
+        btn.textContent = 'Settings';
+        btn.title = 'Leave the stream and open the player settings (the app keeps running)';
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            document.dispatchEvent(new CustomEvent('go-embedded:settings'));
+            this._handleManualQuit();
+        });
+        header.insertBefore(btn, quitBtn);
+        this._settingsBtn = btn;
     }
 
     /**

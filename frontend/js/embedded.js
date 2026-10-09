@@ -51,9 +51,14 @@ export const GamesOperator = {
 
     /** True when opened as /play/#settings: the per-browser streaming settings. */
     settingsMode: false,
+    /** Set by the stream's Settings button: open the settings once the stream is gone. */
+    settingsNext: false,
 
     /** Read `#app=<id>` (kept in sessionStorage so a reload still knows), or `#settings`. */
     detect() {
+        document.addEventListener('go-embedded:settings', () => {
+            this.settingsNext = true;
+        });
         const hash = new URLSearchParams(window.location.hash.slice(1));
         if (hash.has('settings')) {
             this.settingsMode = true;
@@ -96,9 +101,18 @@ export const GamesOperator = {
         if (!main || main.querySelector('.go-settings-back')) return;
         const bar = document.createElement('div');
         bar.className = 'go-settings-back';
-        bar.innerHTML = `<button class="btn btn-secondary" type="button">← Back to hub</button>
-            <span class="muted">These streaming settings are stored in this browser.</span>`;
-        bar.querySelector('button').addEventListener('click', () => this._backToHub());
+        const again = this.streamed && this.appId;
+        bar.innerHTML = `<button class="btn btn-secondary go-settings-hub" type="button">← Back to hub</button>
+            ${again ? '<button class="btn btn-primary go-settings-play" type="button">Play again</button>' : ''}
+            <span class="muted">These streaming settings are stored in this browser${
+                again ? ' and apply to the next stream' : ''
+            }.</span>`;
+        bar.querySelector('.go-settings-hub').addEventListener('click', () => this._backToHub());
+        // Play again: the page starts over on its own hash (#app=<id>) — the
+        // launch flow from the top, with the settings just saved.
+        bar.querySelector('.go-settings-play')?.addEventListener('click', () =>
+            window.location.reload(),
+        );
         main.prepend(bar);
     },
 
@@ -122,7 +136,9 @@ export const GamesOperator = {
         });
         if (resp.status === 401) {
             // Not logged in to the hub: its login page brings the user back.
-            window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname + window.location.hash);
+            window.location.href =
+                '/login?next=' +
+                encodeURIComponent(window.location.pathname + window.location.hash);
             return new Promise(() => {});
         }
         let data = null;
@@ -217,6 +233,12 @@ export const GamesOperator = {
             return;
         }
         if (!this.streamed) return; // before the first launch the loader is up
+        if (this.settingsNext) {
+            // The stream's Settings button: straight to the settings page.
+            this.settingsNext = false;
+            this.showSettings();
+            return;
+        }
         this._show({
             title: this.play?.app?.name || 'games-operator',
             status: 'Stream ended',
@@ -285,7 +307,10 @@ export const GamesOperator = {
         for (let i = 0; i < 30; i++) {
             host = this._matchHost(await this._hosts(), play);
             if (host && host.state === 'online') return host;
-            this._status('Waiting for the Moonlight host…', host ? host.state : play.moonlight_host);
+            this._status(
+                'Waiting for the Moonlight host…',
+                host ? host.state : play.moonlight_host,
+            );
             await sleep(1000);
         }
         throw new Error('the Moonlight host did not come online');
@@ -349,7 +374,7 @@ export const GamesOperator = {
             this._status('Looking for the app on the host…');
             await sleep(1500);
         }
-        throw new Error('the app is not in the host\'s list; is the pairing bound to your user?');
+        throw new Error("the app is not in the host's list; is the pairing bound to your user?");
     },
 
     /** Hide the loader once the stream is up; the hosts hook shows the end screen later. */
