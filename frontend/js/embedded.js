@@ -49,9 +49,22 @@ export const GamesOperator = {
     _overlay: null,
     _watch: null,
 
-    /** Read `#app=<id>` (kept in sessionStorage so a reload still knows). */
+    /** True when opened as /play/#settings: the per-browser streaming settings. */
+    settingsMode: false,
+
+    /** Read `#app=<id>` (kept in sessionStorage so a reload still knows), or `#settings`. */
     detect() {
         const hash = new URLSearchParams(window.location.hash.slice(1));
+        if (hash.has('settings')) {
+            this.settingsMode = true;
+            this.appId = null;
+            try {
+                sessionStorage.removeItem(STORAGE_KEY);
+            } catch {
+                /* ignore */
+            }
+            return true;
+        }
         const id = hash.get('app');
         if (id) {
             try {
@@ -71,7 +84,22 @@ export const GamesOperator = {
     },
 
     isActive() {
-        return !!this.appId;
+        return !!this.appId || this.settingsMode;
+    },
+
+    /** The settings overlay, with the hub as the way back. */
+    showSettings() {
+        document.body.classList.add('go-embedded');
+        this._hide();
+        this.app._openOverlay('settings');
+        const main = document.getElementById('main-content');
+        if (!main || main.querySelector('.go-settings-back')) return;
+        const bar = document.createElement('div');
+        bar.className = 'go-settings-back';
+        bar.innerHTML = `<button class="btn btn-secondary" type="button">← Back to hub</button>
+            <span class="muted">These streaming settings are stored in this browser.</span>`;
+        bar.querySelector('button').addEventListener('click', () => this._backToHub());
+        main.prepend(bar);
     },
 
     // ── Hub API (same origin, hub session cookie, CSRF header on writes) ──
@@ -175,6 +203,19 @@ export const GamesOperator = {
     /** The hosts view in embedded mode: what the user sees after a stream. */
     renderEnd(main) {
         if (main) main.innerHTML = '';
+        if (this.settingsMode) {
+            // Settings closed (Back inside the page): nowhere else to go.
+            this._show({
+                title: 'games-operator',
+                status: 'Player settings saved in this browser',
+                spinner: false,
+                actions: [
+                    { label: 'Settings', onClick: () => this.showSettings() },
+                    { label: 'Back to hub', primary: true, onClick: () => this._backToHub() },
+                ],
+            });
+            return;
+        }
         if (!this.streamed) return; // before the first launch the loader is up
         this._show({
             title: this.play?.app?.name || 'games-operator',
@@ -183,6 +224,7 @@ export const GamesOperator = {
             spinner: false,
             actions: [
                 { label: 'Play again', primary: true, onClick: () => this.start(this.app) },
+                { label: 'Settings', onClick: () => this.showSettings() },
                 { label: 'Back to hub', onClick: () => this._backToHub() },
             ],
         });
@@ -191,6 +233,10 @@ export const GamesOperator = {
     // ── The flow ───────────────────────────────────────────────────────
     async start(app) {
         this.app = app;
+        if (this.settingsMode) {
+            this.showSettings();
+            return;
+        }
         this._show({ title: 'games-operator', status: 'Asking the hub…' });
         try {
             const play = await this.hub('POST', `/apps/${encodeURIComponent(this.appId)}/play`, {});

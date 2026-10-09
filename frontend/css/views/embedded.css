@@ -76,3 +76,21 @@
         transform: rotate(360deg);
     }
 }
+
+/* The settings page opened from the hub: a way back above it. */
+.go-settings-back {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px 0;
+}
+
+.go-settings-back .muted {
+    color: var(--text-secondary, #8b98a5);
+    font-size: 0.9rem;
+}
+
+/* Settings is a page, not a dialog: the header is hidden, give it room. */
+.go-embedded #main-content {
+    padding-top: 8px;
+}
