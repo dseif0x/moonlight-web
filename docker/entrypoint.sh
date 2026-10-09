@@ -77,6 +77,13 @@ case "${MW_UPNP:-}" in
     1|yes|true) apply_setting upnp_enabled true ;;
 esac
 
+# games-operator: pin the browser transport. "wss" rides the same HTTPS
+# connection as the page (through a reverse proxy, a tunnel, a firewall);
+# "auto" is upstream's WebRTC-first chain. Any value transport_mode accepts.
+if [ -n "${MW_TRANSPORT_MODE:-}" ]; then
+    apply_setting transport_mode "\"${MW_TRANSPORT_MODE}\""
+fi
+
 # ── Stale single-instance lock ───────────────────────────────────────────────
 # main.cpp guards against a second server with a QLockFile whose staleness test
 # is "is that PID still alive". In a container the server is PID 1 — so after a
