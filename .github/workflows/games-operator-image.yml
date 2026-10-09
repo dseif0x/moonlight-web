@@ -41,6 +41,24 @@ jobs:
             v="0.0.0-$(git rev-parse --short HEAD)"
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
+      # The Dockerfile compiles through ccache in a --mount=type=cache; the
+      # layer cache does not keep mount contents, so persist them with
+      # actions/cache around the build (cache-dance injects and extracts).
+      - id: ccache
+        uses: actions/cache@v4
+        with:
+          path: ccache
+          key: ccache-${{ hashFiles('backend/**') }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ hashFiles('backend/**') }}-
+            ccache-
+      - uses: reproducible-containers/buildkit-cache-dance@v3.4.0
+        with:
+          cache-map: |
+            {
+              "ccache": "/root/.cache/ccache"
+            }
+          skip-extraction: ${{ steps.ccache.outputs.cache-hit }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:

@@ -53,6 +53,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
+        ccache \
         cmake \
         ninja-build \
         pkg-config \
@@ -86,10 +87,17 @@ COPY frontend frontend
 
 # The ARGs above are already in this shell's environment (Docker exports build
 # arguments to RUN), which is where CMake looks for them.
-RUN cmake -S backend -B /tmp/build -G Ninja \
+# ccache keeps object files across builds (games-operator fork: the image is
+# rebuilt per go-v* tag with only the version string changing). The cache
+# mount is persisted between CI runs by the workflow.
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    cmake -S backend -B /tmp/build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
         -DMW_VERSION="${MW_VERSION}" \
  && cmake --build /tmp/build -j "$(nproc)" \
+ && ccache -s \
  && cmake --install /tmp/build --prefix /stage \
  && rm -rf /tmp/build
 
