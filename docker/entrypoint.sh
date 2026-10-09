@@ -83,6 +83,11 @@ esac
 if [ -n "${MW_TRANSPORT_MODE:-}" ]; then
     apply_setting transport_mode "\"${MW_TRANSPORT_MODE}\""
 fi
+# games-operator: the codec asked of the host. "h264" decodes in every
+# browser; "auto" negotiates HEVC/AV1 where the browser claims support.
+if [ -n "${MW_VIDEO_CODEC:-}" ]; then
+    apply_setting video_codec "\"${MW_VIDEO_CODEC}\""
+fi
 
 # ── Stale single-instance lock ───────────────────────────────────────────────
 # main.cpp guards against a second server with a QLockFile whose staleness test
