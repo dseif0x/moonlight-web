@@ -5,7 +5,9 @@
 .go-embedded .app-header,
 .go-embedded .app-footer,
 .go-embedded #discord-link,
-.go-embedded .discord-link {
+.go-embedded .discord-link,
+.go-embedded .stream-console-btn,
+.go-embedded .share-btn {
     display: none !important;
 }
 

@@ -123,7 +123,7 @@ import { StreamViewTouch } from './StreamViewTouch.js';
 import { StreamViewFullscreen } from './StreamViewFullscreen.js';
 import { flushClientLog, serverDiag } from '../util/ClientLog.js';
 import { UltraPlayer, ultraPlayerSupported } from '../stream/ultra/UltraPlayer.js';
-import { url } from '../util/basePath.js';
+import { url, isEmbedded } from '../util/basePath.js';
 
 /**
  * Lane name → the i18n key the card already uses for that value. The graph
@@ -2012,7 +2012,9 @@ export class StreamView {
                     // browser can swallow before it ever leaves the page. A
                     // native button is the only reliable way back, so it is
                     // offered wherever that console exists.
-                    this._hasConsoleHotkey()
+                    // games-operator embedded mode: the hub is the launcher,
+                    // Wolf's own console is never where the user wants to go.
+                    this._hasConsoleHotkey() && !isEmbedded()
                         ? `<button class="btn btn-secondary stream-console-btn stream-ctl-prestart"
                                    id="btn-stream-console"
                                    title="${escapeHtml(t('stream.consoleHint'))}">${escapeHtml(
@@ -4087,6 +4089,8 @@ export class StreamView {
      */
     _mountShareMenu() {
         if (this._playerMode || this._shareMenu || !this._rootEl) return;
+        // games-operator embedded mode: no host list, no sharing board.
+        if (isEmbedded()) return;
         const header = /** @type {HTMLElement} */ (this._rootEl.querySelector('.stream-header'));
         const quitBtn = /** @type {HTMLElement} */ (this._rootEl.querySelector('#btn-stream-quit'));
         if (!header || !quitBtn) return;
