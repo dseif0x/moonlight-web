@@ -21,6 +21,7 @@
  * hub, which lives at the root of the same host.
  */
 import { BackendClient } from './api/BackendClient.js';
+import { url } from './util/basePath.js';
 
 const STORAGE_KEY = 'go_app';
 const HUB_API = '/api/v1';
@@ -110,9 +111,7 @@ export const GamesOperator = {
         bar.querySelector('.go-settings-hub').addEventListener('click', () => this._backToHub());
         // Play again: the page starts over on its own hash (#app=<id>) — the
         // launch flow from the top, with the settings just saved.
-        bar.querySelector('.go-settings-play')?.addEventListener('click', () =>
-            window.location.reload(),
-        );
+        bar.querySelector('.go-settings-play')?.addEventListener('click', () => this._replay());
         main.prepend(bar);
     },
 
@@ -199,7 +198,23 @@ export const GamesOperator = {
     },
 
     _backToHub() {
+        this._forget();
         window.location.href = '/';
+    },
+
+    /** Drop the remembered app: a plain /play/ in this tab goes to the hub again. */
+    _forget() {
+        try {
+            sessionStorage.removeItem(STORAGE_KEY);
+        } catch {
+            /* ignore */
+        }
+    },
+
+    /** Start over on the app (#app=<id> is explicit: the router drops the hash). */
+    _replay() {
+        window.location.replace(url('/') + '#app=' + encodeURIComponent(this.appId));
+        window.location.reload();
     },
 
     _fail(err) {
@@ -233,6 +248,10 @@ export const GamesOperator = {
             return;
         }
         if (!this.streamed) return; // before the first launch the loader is up
+        // The stream is over: a reload or a plain /play/ from here goes to the
+        // hub, not back into the game (a reload while streaming resumes it,
+        // that is what the stored id is for; start() stores it again).
+        this._forget();
         if (this.settingsNext) {
             // The stream's Settings button: straight to the settings page.
             this.settingsNext = false;
@@ -258,6 +277,11 @@ export const GamesOperator = {
         if (this.settingsMode) {
             this.showSettings();
             return;
+        }
+        try {
+            sessionStorage.setItem(STORAGE_KEY, this.appId);
+        } catch {
+            /* private mode */
         }
         this._show({ title: 'games-operator', status: 'Asking the hub…' });
         try {

@@ -289,7 +289,8 @@ const MoonlightApp = {
         if (!pageCameThroughTunnel()) {
             const direct = window.location.pathname.match(/^\/[0-9a-z]{26}\/?$/i);
             const token = new URLSearchParams(window.location.hash.slice(1)).get('t');
-            if (direct && token) history.replaceState(null, '', url('/p/' + encodeURIComponent(token)));
+            if (direct && token)
+                history.replaceState(null, '', url('/p/' + encodeURIComponent(token)));
         }
         if (window.location.pathname === '/p' || window.location.pathname.startsWith('/p/')) {
             await this._initPlayerMode();
@@ -336,9 +337,15 @@ const MoonlightApp = {
         // Mounted below a prefix by the hub, opened as /play/#app=<id>: no
         // setup wizard, no nav buttons, no host list. The router still runs so
         // the stream's history guard pops back to our end screen (_renderHosts).
-        if (isEmbedded() && GamesOperator.detect()) {
-            this._initRouter();
-            GamesOperator.start(this);
+        if (isEmbedded()) {
+            if (GamesOperator.detect()) {
+                this._initRouter();
+                GamesOperator.start(this);
+                return;
+            }
+            // Nothing to play and no settings asked for: the hub is the
+            // start page, this frontend has none of its own here.
+            window.location.replace('/');
             return;
         }
         this._offerHomeScreenHandoff();
@@ -714,7 +721,10 @@ const MoonlightApp = {
         this._renderHosts(main);
 
         // Fix URL if an overlay left it at /admin or /settings.
-        if (window.location.pathname === url('/admin') || window.location.pathname === url('/settings')) {
+        if (
+            window.location.pathname === url('/admin') ||
+            window.location.pathname === url('/settings')
+        ) {
             history.replaceState({ view: 'hosts' }, '', url('/'));
         }
     },
