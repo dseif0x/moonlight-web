@@ -360,8 +360,23 @@ void WolfBackend::getAppList(const QString& seatId, BackendAppListCallback cb)
 {
     // Intentionally the GameStream list, not /api/v1/apps: what Wolf advertises
     // here is Wolf UI, which carries profiles, PINs, the catalogue and lobbies.
-    Q_UNUSED(seatId);
-    m_GameStream->getAppList(m_GameStream->seatId(), std::move(cb));
+    //
+    // Asked under the device's own seat, the certificate it launches with: a
+    // host that keeps a list per client (games-operator: one per hub user)
+    // must see the same client both times. No device id = the default
+    // identity, as before.
+    if (seatId.isEmpty()) {
+        m_GameStream->getAppList(m_GameStream->seatId(), std::move(cb));
+        return;
+    }
+    pairIdentity(seatId,
+                 [this, seatId, cb = std::move(cb)](bool ok, const BackendError& err) mutable {
+                     if (!ok) {
+                         cb(false, err, {});
+                         return;
+                     }
+                     m_GameStream->getAppListAs(seatId, std::move(cb));
+                 });
 }
 
 void WolfBackend::launch(const QString& seatId, const LaunchRequest& req, BackendMediaCallback cb)

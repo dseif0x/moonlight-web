@@ -65,6 +65,9 @@ public:
     void releaseSeat(const QString& seatId) override;
 
     void getAppList(const QString& seatId, BackendAppListCallback cb) override;
+    /// The app list as one identity: empty = this backend's own (the default
+    /// one for a plain host). A Wolf seat asks under its own certificate.
+    void getAppListAs(const QString& identitySeat, BackendAppListCallback cb);
 
     void launch(const QString& seatId, const LaunchRequest& req, BackendMediaCallback cb) override;
     void resume(const QString& seatId, const LaunchRequest& req, BackendMediaCallback cb) override;

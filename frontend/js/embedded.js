@@ -272,10 +272,47 @@ export const GamesOperator = {
     },
 
     // ── The flow ───────────────────────────────────────────────────────
+    /**
+     * The browser's client id with the hub user folded in: 16 hex chars of
+     * device plus 16 of user. The backend derives the Wolf seat — the client
+     * certificate it presents and pairs — from this id, so one browser used
+     * by two hub accounts is two clients, each paired to its own account.
+     */
+    async _identify() {
+        const me = await this.hub('GET', '/auth/me');
+        this._csrf = me.csrf || this._csrf;
+        const user = String(me.user?.id || '')
+            .replace(/[^0-9a-f]/gi, '')
+            .toUpperCase()
+            .padEnd(16, '0')
+            .slice(0, 16);
+        let device = '';
+        try {
+            device = localStorage.getItem('mw_client_device') || '';
+            if (!/^[0-9A-F]{16}$/.test(device)) {
+                // The id this browser had before, or a new one.
+                const old = localStorage.getItem('mw_client_uniqueid') || '';
+                device = /^[0-9A-F]{16}/.test(old)
+                    ? old.slice(0, 16)
+                    : BackendClient.clientUniqueId().slice(0, 16);
+                localStorage.setItem('mw_client_device', device);
+            }
+            localStorage.setItem('mw_client_uniqueid', device + user);
+        } catch {
+            /* private mode: the backend's default identity, shared */
+        }
+    },
+
     async start(app) {
         this.app = app;
         if (this.settingsMode) {
             this.showSettings();
+            return;
+        }
+        try {
+            await this._identify();
+        } catch (err) {
+            this._fail(err);
             return;
         }
         try {

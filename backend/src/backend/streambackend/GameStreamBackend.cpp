@@ -153,22 +153,24 @@ void GameStreamBackend::releaseSeat(const QString& seatId)
 void GameStreamBackend::getAppList(const QString& seatId, BackendAppListCallback cb)
 {
     Q_UNUSED(seatId);
+    // Empty seat = the default identity, so a plain host is asked exactly as it
+    // always was. A MultiSeat seat was paired under its own certificate and
+    // knows no other, so it has to be the one presented here too.
+    getAppListAs(m_IdentitySeat, std::move(cb));
+}
 
+void GameStreamBackend::getAppListAs(const QString& identitySeat, BackendAppListCallback cb)
+{
     BackendError err;
     NvComputer* host = requireReadyHost(err);
     if (!host) {
         cb(false, err, {});
         return;
     }
-
     IdentityManager* im = IdentityManager::get();
     quint16 httpsPort = host->activeHttpsPort > 0 ? host->activeHttpsPort : MW_HTTPS_PORT;
     const NvAddress addr = host->uniqueAddresses().first();
-
-    // Empty seat = the default identity, so a plain host is asked exactly as it
-    // always was. A MultiSeat seat was paired under its own certificate and
-    // knows no other, so it has to be the one presented here too.
-    const ClientIdentity identity = im->identityForSeat(m_IdentitySeat);
+    const ClientIdentity identity = im->identityForSeat(identitySeat);
     QNetworkReply* reply =
         m_Http->getAppListAsync(addr, httpsPort, identity.certPem, identity.keyPem);
 

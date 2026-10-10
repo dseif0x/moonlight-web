@@ -279,7 +279,13 @@ export class BackendClient {
         return this.post(`/api/hosts/${hostId}/pair`);
     }
     static async getAppList(hostId) {
-        return this.get(`/api/hosts/${hostId}/apps`);
+        // With the device id: on a Wolf host the list is asked under the
+        // device's own seat identity (its own client certificate), so each
+        // device — and in games-operator embedded mode each hub user — is
+        // the client the host believes it is, for the list as for a launch.
+        return this.get(
+            `/api/hosts/${hostId}/apps?client_uniqueid=${encodeURIComponent(this.clientUniqueId())}`,
+        );
     }
     /** Backend types this server can drive, so the UI never hardcodes them. */
     static async getBackendTypes() {
@@ -340,7 +346,10 @@ export class BackendClient {
      */
     static clientUniqueId() {
         let id = localStorage.getItem('mw_client_uniqueid');
-        if (!id || !/^[0-9A-F]{16}$/.test(id)) {
+        // 16 hex chars for a browser; 32 when games-operator embedded mode
+        // appended the hub user (embedded.js), so two accounts in one
+        // browser are two clients to the host.
+        if (!id || !/^[0-9A-F]{16}(?:[0-9A-F]{16})?$/.test(id)) {
             const bytes = new Uint8Array(8);
             crypto.getRandomValues(bytes);
             id = Array.from(bytes, (b) => b.toString(16).padStart(2, '0'))
@@ -430,9 +439,12 @@ export class BackendClient {
         try {
             // This device's own, where each device has a seat (MultiSeat).
             const device = encodeURIComponent(this.clientUniqueId());
-            const resp = await fetch(url(`/api/hosts/${hostId}/running-app?client_uniqueid=${device}`), {
-                signal: controller ? controller.signal : undefined,
-            });
+            const resp = await fetch(
+                url(`/api/hosts/${hostId}/running-app?client_uniqueid=${device}`),
+                {
+                    signal: controller ? controller.signal : undefined,
+                },
+            );
             if (!resp.ok) return this._handleError(resp, 'running-app');
             return resp.json();
         } finally {

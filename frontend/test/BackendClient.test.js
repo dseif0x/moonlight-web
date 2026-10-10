@@ -234,7 +234,15 @@ describe('BackendClient', () => {
 
 /** @type {[string, () => Promise<any>, string][]} */
 const GET_ROUTES = [
-    ['getAppList', () => BackendClient.getAppList('h1'), '/api/hosts/h1/apps'],
+    // The device id rides along: a Wolf host answers per client identity.
+    [
+        'getAppList',
+        () => {
+            localStorage.setItem('mw_client_uniqueid', '0123456789ABCDEF');
+            return BackendClient.getAppList('h1');
+        },
+        '/api/hosts/h1/apps?client_uniqueid=0123456789ABCDEF',
+    ],
     ['getBackendTypes', () => BackendClient.getBackendTypes(), '/api/backends'],
     ['getHostBackend', () => BackendClient.getHostBackend('h1'), '/api/hosts/h1/backend'],
     ['getHostSeats', () => BackendClient.getHostSeats('h1'), '/api/hosts/h1/seats'],
