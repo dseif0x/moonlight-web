@@ -84,7 +84,9 @@ describe('BackendClient', () => {
     it('remote clients get no key and still send the request', async () => {
         const fetchMock = vi.fn().mockImplementation((path) => {
             if (path === '/api/admin/token')
-                return Promise.resolve(jsonResponse({ error: 'forbidden' }, { ok: false, status: 403 }));
+                return Promise.resolve(
+                    jsonResponse({ error: 'forbidden' }, { ok: false, status: 403 }),
+                );
             return Promise.resolve(jsonResponse({ ok: true }));
         });
         vi.stubGlobal('fetch', fetchMock);
@@ -103,7 +105,12 @@ describe('BackendClient', () => {
     });
 
     it('throws a rich error on a non-auth failure', async () => {
-        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ message: 'boom' }, { ok: false, status: 500 })));
+        vi.stubGlobal(
+            'fetch',
+            vi
+                .fn()
+                .mockResolvedValue(jsonResponse({ message: 'boom' }, { ok: false, status: 500 })),
+        );
         await expect(BackendClient.getHosts()).rejects.toMatchObject({
             message: 'boom',
             statusCode: 500,
@@ -111,14 +118,27 @@ describe('BackendClient', () => {
     });
 
     it('does not reload on a 401 from an auth endpoint', async () => {
-        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: 'nope' }, { ok: false, status: 401 })));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn().mockResolvedValue(jsonResponse({ error: 'nope' }, { ok: false, status: 401 })),
+        );
         await expect(BackendClient.getAuthStatus()).rejects.toMatchObject({ statusCode: 401 });
     });
 
     it('breaks the reload loop using the sessionStorage guard', async () => {
         BackendClient._hadSession = true; // the reload path only runs for a session that existed
         sessionStorage.setItem('mw_auth_reload', '1'); // pretend we already reloaded once
-        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ message: 'authentication_required' }, { ok: false, status: 401 })));
+        vi.stubGlobal(
+            'fetch',
+            vi
+                .fn()
+                .mockResolvedValue(
+                    jsonResponse(
+                        { message: 'authentication_required' },
+                        { ok: false, status: 401 },
+                    ),
+                ),
+        );
         await expect(BackendClient.getHosts()).rejects.toMatchObject({ statusCode: 401 });
         expect(sessionStorage.getItem('mw_auth_reload')).toBeNull(); // guard cleared
     });
@@ -132,7 +152,17 @@ describe('BackendClient', () => {
         const reload = vi.fn();
         const original = window.location;
         Object.defineProperty(window, 'location', { value: { reload }, configurable: true });
-        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ message: 'authentication_required' }, { ok: false, status: 401 })));
+        vi.stubGlobal(
+            'fetch',
+            vi
+                .fn()
+                .mockResolvedValue(
+                    jsonResponse(
+                        { message: 'authentication_required' },
+                        { ok: false, status: 401 },
+                    ),
+                ),
+        );
         await expect(BackendClient.getHosts()).rejects.toMatchObject({ statusCode: 401 });
         Object.defineProperty(window, 'location', { value: original, configurable: true });
         expect(reload).not.toHaveBeenCalled();
@@ -146,7 +176,17 @@ describe('BackendClient', () => {
         const reload = vi.fn();
         const original = window.location;
         Object.defineProperty(window, 'location', { value: { reload }, configurable: true });
-        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ message: 'authentication_required' }, { ok: false, status: 401 })));
+        vi.stubGlobal(
+            'fetch',
+            vi
+                .fn()
+                .mockResolvedValue(
+                    jsonResponse(
+                        { message: 'authentication_required' },
+                        { ok: false, status: 401 },
+                    ),
+                ),
+        );
         // The call never settles — _handleError hands back a pending promise so
         // the caller cannot race the navigation.
         BackendClient.getHosts();
@@ -288,7 +328,12 @@ const POST_ROUTES = [
         { user: 'ada' },
     ],
     // The device rides along: on a MultiSeat host, Quit is this device's seat's.
-    ['stopHostSession', () => BackendClient.stopHostSession('h1'), '/api/hosts/h1/stop-session', { client_uniqueid: expect.stringMatching(/^[0-9A-F]{16}$/) }],
+    [
+        'stopHostSession',
+        () => BackendClient.stopHostSession('h1'),
+        '/api/hosts/h1/stop-session',
+        { client_uniqueid: expect.stringMatching(/^[0-9A-F]{16}$/) },
+    ],
     [
         'shareActivate',
         () => BackendClient.shareActivate(2, { host_uuid: 'u1', app_id: 7 }),
@@ -314,7 +359,12 @@ const POST_ROUTES = [
         '/api/share/slots/1/name',
         { name: 'Bob' },
     ],
-    ['shareDeactivate', () => BackendClient.shareDeactivate(1), '/api/share/slots/1/deactivate', {}],
+    [
+        'shareDeactivate',
+        () => BackendClient.shareDeactivate(1),
+        '/api/share/slots/1/deactivate',
+        {},
+    ],
     [
         'playerPin',
         () => BackendClient.playerPin('tok', '1234'),
@@ -420,7 +470,11 @@ const POST_ROUTES = [
 /** @type {[string, () => Promise<any>, string][]} */
 const DELETE_ROUTES = [
     ['clearHostBackend', () => BackendClient.clearHostBackend('h1'), '/api/hosts/h1/backend'],
-    ['teardownHostSeat', () => BackendClient.teardownHostSeat('h1', 's2'), '/api/hosts/h1/seats/s2'],
+    [
+        'teardownHostSeat',
+        () => BackendClient.teardownHostSeat('h1', 's2'),
+        '/api/hosts/h1/seats/s2',
+    ],
     [
         'releaseHostSeatOwner',
         () => BackendClient.releaseHostSeatOwner('h1', 's2'),
@@ -563,7 +617,9 @@ describe('BackendClient request shaping', () => {
         const answer = await BackendClient.getRunningApp('h1');
         expect(answer).toEqual({ currentGameId: 7 });
         // For this device: on MultiSeat, the app on its own seat.
-        expect(fetchMock.apiCalls()[0][0]).toBe(`/api/hosts/h1/running-app?client_uniqueid=${BackendClient.clientUniqueId()}`);
+        expect(fetchMock.apiCalls()[0][0]).toBe(
+            `/api/hosts/h1/running-app?client_uniqueid=${BackendClient.clientUniqueId()}`,
+        );
     });
 
     it('quitApp defaults to this browser when no slot is named', async () => {
