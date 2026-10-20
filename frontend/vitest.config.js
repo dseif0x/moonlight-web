@@ -26,6 +26,7 @@ export default defineConfig({
     test: {
         environment: 'jsdom',
         include: ['test/**/*.test.js'],
+        setupFiles: ['test/setup.js'],
         // Tests assert observable behavior only (inputs → outputs / emitted
         // bytes / sent messages), never private internals, so they survive
         // refactors of the implementation.
