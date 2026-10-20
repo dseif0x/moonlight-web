@@ -7,13 +7,22 @@
 #   ghcr.io/<owner>/moonlight-web:go-<version>   (go-v0.1.0 -> go-0.1.0)
 #   ghcr.io/<owner>/moonlight-web:go-latest
 #
-# amd64 only: the hub runs it next to itself on an x86 node, and a native
-# arm64 build would double a 20-minute C++ build.
+# for linux/amd64 and linux/arm64. Each architecture builds on its own native
+# runner (no QEMU: emulating the C++ build would take hours) and pushes by
+# digest; the merge job stitches both into one manifest list and tags it, as
+# upstream's docker.yml does. A pull request touching the image builds both
+# architectures and pushes nothing.
 name: games-operator image
 
 on:
   push:
     tags: ["go-v*"]
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker/entrypoint.sh"
+      - ".github/workflows/games-operator-image.yml"
   workflow_dispatch:
     inputs:
       publish:
@@ -27,7 +36,18 @@ permissions:
 
 jobs:
   image:
-    runs-on: ubuntu-latest
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            slug: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            slug: arm64
     steps:
       - uses: actions/checkout@v5
         with:
@@ -44,14 +64,15 @@ jobs:
       # The Dockerfile compiles through ccache in a --mount=type=cache; the
       # layer cache does not keep mount contents, so persist them with
       # actions/cache around the build (cache-dance injects and extracts).
+      # One cache per architecture: the object files are not interchangeable.
       - id: ccache
         uses: actions/cache@v4
         with:
           path: ccache
-          key: ccache-${{ hashFiles('backend/**') }}-${{ github.sha }}
+          key: ccache-${{ matrix.slug }}-${{ hashFiles('backend/**') }}-${{ github.sha }}
           restore-keys: |
-            ccache-${{ hashFiles('backend/**') }}-
-            ccache-
+            ccache-${{ matrix.slug }}-${{ hashFiles('backend/**') }}-
+            ccache-${{ matrix.slug }}-
       - uses: reproducible-containers/buildkit-cache-dance@v3.4.0
         with:
           cache-map: |
@@ -65,15 +86,69 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - id: build
+        uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64
-          push: ${{ startsWith(github.ref, 'refs/tags/go-v') || inputs.publish == true }}
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/moonlight-web:go-${{ steps.ver.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/moonlight-web:go-latest
+          platforms: ${{ matrix.platform }}
+          # Untagged, by digest: the merge job applies the tags to the
+          # manifest list. `cacheonly` builds and throws the image away.
+          outputs: >-
+            ${{ (startsWith(github.ref, 'refs/tags/go-v') || inputs.publish == true)
+                && format('type=image,name=ghcr.io/{0}/moonlight-web,push-by-digest=true,name-canonical=true,push=true', github.repository_owner)
+                || 'type=cacheonly' }}
           build-args: |
             MW_VERSION=${{ steps.ver.outputs.version }}-go
-          cache-from: type=gha,scope=games-operator
-          cache-to: type=gha,mode=max,scope=games-operator
+          cache-from: type=gha,scope=games-operator-${{ matrix.slug }}
+          cache-to: type=gha,mode=max,scope=games-operator-${{ matrix.slug }}
+      - name: Export digest
+        if: ${{ startsWith(github.ref, 'refs/tags/go-v') || inputs.publish == true }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v6
+        if: ${{ startsWith(github.ref, 'refs/tags/go-v') || inputs.publish == true }}
+        with:
+          name: digest-${{ matrix.slug }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Publish manifest
+    needs: image
+    if: ${{ startsWith(github.ref, 'refs/tags/go-v') || inputs.publish == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+      - id: ver
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/go-v* ]]; then
+            v="${GITHUB_REF#refs/tags/go-v}"
+          else
+            v="0.0.0-${GITHUB_SHA::7}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create and push manifest list
+        working-directory: /tmp/digests
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/moonlight-web
+        run: |
+          docker buildx imagetools create \
+            -t "$IMAGE:go-${{ steps.ver.outputs.version }}" \
+            -t "$IMAGE:go-latest" \
+            $(printf "$IMAGE@sha256:%s " *)
+          docker buildx imagetools inspect "$IMAGE:go-${{ steps.ver.outputs.version }}"
